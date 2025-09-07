@@ -1,5 +1,10 @@
-dnspython>=2.0.0
-requests>=2.25.0
+requests>=2.25.1
+tkinter
+threading
+queue
+json
+time
+socket
+ssl
+concurrent.futures
 urllib3>=1.26.0
-Pillow>=8.0.0
-pyinstaller>=5.0.0
