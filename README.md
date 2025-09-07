@@ -1,4 +1,4 @@
-# Arma Reforger 创意工坊修复工具 v1.1.0
+# Arma Reforger 创意工坊修复工具 v1.1.1
 
 专门为《Arma Reforger》玩家设计的 DNS 污染和劫持修复工具。当玩家在下载创意工坊内容时遇到 DNS 污染、劫持或连接错误时，此工具可以自动测试并选择最优的 `ar-gcp-cdn.bistudio.com` IP 地址，修复下载问题。
 
@@ -118,6 +118,10 @@ python hosts_optimizer.py
 此项目使用 GNU General Public License v2.0 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 版本历史
+
+- **v1.1.1** (2025-09-08): 图标更新
+  - 🎨 **图标更新**: 将软件图标从icon.ico更新为favicon.ico
+  - 🔧 **界面优化**: 改进窗口图标显示，提升用户体验
 
 - **v1.1.0** (2025-09-08): 重大功能更新
   - 🎨 **GUI界面全面升级**: 新增更多检测属性列，包括SSL状态、HTTP/2支持、带宽、稳定性等

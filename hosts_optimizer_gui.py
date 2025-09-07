@@ -28,7 +28,7 @@ class HostsOptimizerGUI:
         
         # 设置图标（如果有的话）
         try:
-            self.root.iconbitmap("icon.ico")
+            self.root.iconbitmap("favicon.ico")
         except:
             pass
         
