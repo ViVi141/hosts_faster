@@ -12,6 +12,9 @@ import platform
 import os
 import sys
 import json
+import statistics
+import hashlib
+import random
 from typing import List, Dict, Tuple
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +24,1087 @@ from urllib.parse import urlparse
 import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import ssl
+import socket
+from datetime import datetime
+
+
+class NetworkQuality:
+    """网络质量实时评估"""
+    
+    def __init__(self):
+        self.recent_latencies = []
+        self.recent_errors = []
+        self.max_history = 10
+    
+    def get_quality_factor(self) -> float:
+        """返回网络质量因子 (0.5-2.0)"""
+        if not self.recent_latencies:
+            return 1.0
+        
+        avg_latency = sum(self.recent_latencies) / len(self.recent_latencies)
+        error_rate = len(self.recent_errors) / max(len(self.recent_latencies), 1)
+        
+        # 基于延迟和错误率计算质量因子
+        if avg_latency < 50 and error_rate < 0.1:
+            return 2.0  # 优秀网络，可以高并发
+        elif avg_latency < 100 and error_rate < 0.2:
+            return 1.5  # 良好网络
+        elif avg_latency < 200 and error_rate < 0.3:
+            return 1.0  # 一般网络
+        else:
+            return 0.5  # 较差网络，降低并发
+    
+    def update_metrics(self, latency: float, success: bool):
+        """更新网络质量指标"""
+        self.recent_latencies.append(latency)
+        if not success:
+            self.recent_errors.append(time.time())
+        
+        # 保持历史记录在合理范围内
+        if len(self.recent_latencies) > self.max_history:
+            self.recent_latencies.pop(0)
+        if len(self.recent_errors) > self.max_history:
+            self.recent_errors.pop(0)
+
+
+class AdaptiveConcurrencyManager:
+    """自适应并发管理器 - 根据网络状况动态调整并发数"""
+    
+    def __init__(self):
+        self.base_workers = 5
+        self.max_workers = 20
+        self.network_quality = NetworkQuality()
+        self.adaptive_mode = True
+    
+    def get_optimal_workers(self, total_ips: int) -> int:
+        """根据网络质量和IP数量动态计算最优并发数"""
+        if not self.adaptive_mode:
+            return min(self.base_workers, total_ips)
+        
+        # 根据网络质量调整基础并发数
+        quality_factor = self.network_quality.get_quality_factor()
+        adjusted_workers = int(self.base_workers * quality_factor)
+        
+        # 根据IP数量调整
+        if total_ips <= 5:
+            return min(3, total_ips)  # 少量IP时降低并发
+        elif total_ips <= 15:
+            return min(adjusted_workers, total_ips)
+        else:
+            return min(self.max_workers, total_ips)
+
+
+class OptimizedConnectionManager:
+    """优化的连接管理器"""
+    
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.session_pool = {}
+        self.connection_pool = None
+        self.setup_connection_pool()
+    
+    def setup_connection_pool(self):
+        """设置连接池"""
+        # 从配置获取参数
+        retry_attempts = self.config.get("retry_attempts", 2)
+        pool_size = self.config.get("connection_pool_size", 20)
+        
+        # 创建优化的 HTTP 适配器
+        retry_strategy = Retry(
+            total=retry_attempts,  # 从配置获取重试次数
+            backoff_factor=0.1,  # 快速重试
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        
+        self.connection_pool = HTTPAdapter(
+            pool_connections=pool_size,  # 从配置获取连接池大小
+            pool_maxsize=pool_size,
+            max_retries=retry_strategy,
+            pool_block=False  # 非阻塞模式
+        )
+    
+    def get_session(self, ip: str) -> requests.Session:
+        """获取或创建会话"""
+        if ip not in self.session_pool:
+            session = requests.Session()
+            session.mount("http://", self.connection_pool)
+            session.mount("https://", self.connection_pool)
+            
+            # 优化会话配置
+            session.headers.update({
+                'User-Agent': 'HostsOptimizer/1.0',
+                'Connection': 'keep-alive',
+                'Accept-Encoding': 'gzip, deflate'
+            })
+            
+            self.session_pool[ip] = session
+        
+        return self.session_pool[ip]
+    
+    def cleanup(self):
+        """清理连接池"""
+        for session in self.session_pool.values():
+            session.close()
+        self.session_pool.clear()
+
+
+class MultiDimensionalHealthChecker:
+    """多维度健康检测器"""
+    
+    def __init__(self, config: Dict):
+        self.config = config
+        self.test_iterations = config.get("health_test_iterations", 3)
+        self.stability_threshold = config.get("stability_threshold", 0.8)
+        
+    def check_connection_stability(self, ip: str, port: int = 443) -> Dict:
+        """检查连接稳定性"""
+        results = {
+            'success_rate': 0.0,
+            'avg_latency': 0.0,
+            'latency_std': 0.0,
+            'stability_score': 0.0,
+            'connection_errors': []
+        }
+        
+        latencies = []
+        success_count = 0
+        
+        for i in range(self.test_iterations):
+            try:
+                start_time = time.time()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((ip, port))
+                sock.close()
+                end_time = time.time()
+                
+                latency = (end_time - start_time) * 1000
+                latencies.append(latency)
+                success_count += 1
+                
+            except Exception as e:
+                results['connection_errors'].append(str(e))
+            
+            time.sleep(0.1)  # 短暂间隔
+        
+        if latencies:
+            results['success_rate'] = success_count / self.test_iterations
+            results['avg_latency'] = statistics.mean(latencies)
+            results['latency_std'] = statistics.stdev(latencies) if len(latencies) > 1 else 0
+            results['stability_score'] = min(1.0, results['success_rate'] * (1 - results['latency_std'] / results['avg_latency']))
+        
+        return results
+    
+    def check_bandwidth(self, ip: str, domain: str) -> Dict:
+        """检查带宽（基于响应时间和数据量估算）"""
+        results = {
+            'bandwidth_mbps': 0.0,
+            'response_time': 0.0,
+            'data_size': 0,
+            'bandwidth_score': 0.0,
+            'test_method': 'response_based'
+        }
+        
+        try:
+            # 使用HEAD请求获取响应时间和内容长度
+            test_url = f"https://{ip}/"
+            headers = {'Host': domain}
+            
+            # 测试1: HEAD请求获取基本信息
+            start_time = time.time()
+            head_response = requests.head(
+                test_url,
+                headers=headers,
+                timeout=5,
+                verify=False,
+                allow_redirects=True
+            )
+            head_time = time.time() - start_time
+            
+            # 测试2: 小数据量GET请求
+            start_time = time.time()
+            get_response = requests.get(
+                test_url,
+                headers=headers,
+                timeout=8,
+                verify=False,
+                stream=True
+            )
+            
+            # 只读取前64KB数据
+            data_size = 0
+            max_size = 64 * 1024  # 64KB
+            for chunk in get_response.iter_content(chunk_size=8192):
+                data_size += len(chunk)
+                if data_size >= max_size:
+                    break
+            
+            get_time = time.time() - start_time
+            
+            # 基于响应时间和数据量估算带宽
+            if get_time > 0 and data_size > 0:
+                # 计算实际传输时间（减去连接建立时间）
+                actual_transfer_time = max(0.001, get_time - head_time)
+                bandwidth_mbps = (data_size * 8) / (actual_transfer_time * 1024 * 1024)
+                
+                results['bandwidth_mbps'] = bandwidth_mbps
+                results['response_time'] = get_time
+                results['data_size'] = data_size
+                
+                # 基于响应时间和数据量计算评分
+                # 考虑响应时间越短、数据量越大，评分越高
+                time_score = max(0, 1 - (get_time / 5))  # 5秒内完成得满分
+                size_score = min(1, data_size / (32 * 1024))  # 32KB以上得满分
+                results['bandwidth_score'] = (time_score + size_score) / 2
+                
+                # 如果带宽计算合理，使用带宽评分
+                if 0.1 <= bandwidth_mbps <= 100:  # 合理的带宽范围
+                    results['bandwidth_score'] = min(1.0, bandwidth_mbps / 5)  # 5Mbps为满分
+                    results['test_method'] = 'bandwidth_calculated'
+        
+        except Exception as e:
+            # 如果网络测试失败，使用连接延迟作为替代指标
+            try:
+                start_time = time.time()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                sock.connect((ip, 443))
+                sock.close()
+                connect_time = time.time() - start_time
+                
+                # 基于连接延迟估算网络质量
+                if connect_time < 0.1:
+                    results['bandwidth_score'] = 0.9
+                elif connect_time < 0.2:
+                    results['bandwidth_score'] = 0.7
+                elif connect_time < 0.5:
+                    results['bandwidth_score'] = 0.5
+                else:
+                    results['bandwidth_score'] = 0.3
+                
+                results['test_method'] = 'latency_based'
+                results['response_time'] = connect_time
+                
+            except Exception as e2:
+                results['error'] = f"网络测试失败: {str(e2)[:50]}"
+                results['bandwidth_score'] = 0.0
+        
+        return results
+    
+    def check_ssl_quality(self, ip: str, domain: str) -> Dict:
+        """检查SSL证书质量"""
+        results = {
+            'cert_score': 0.0,
+            'cert_validity_days': 0,
+            'cert_issuer': '',
+            'cert_algorithm': '',
+            'cert_strength': '',
+            'ssl_grade': 'F'
+        }
+        
+        try:
+            context = ssl.create_default_context()
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            
+            with socket.create_connection((ip, 443), timeout=5) as sock:
+                with context.wrap_socket(sock, server_hostname=domain) as ssock:
+                    cert = ssock.getpeercert()
+                    
+                    # 证书有效期
+                    not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+                    days_until_expiry = (not_after - datetime.now()).days
+                    results['cert_validity_days'] = days_until_expiry
+                    
+                    # 证书颁发者
+                    issuer = cert.get('issuer', [])
+                    for item in issuer:
+                        if item[0][0] == 'organizationName':
+                            results['cert_issuer'] = item[0][1]
+                            break
+                    
+                    # 证书算法和强度
+                    cipher = ssock.cipher()
+                    if cipher:
+                        results['cert_algorithm'] = cipher[0]
+                        results['cert_strength'] = str(cipher[2])
+                    
+                    # 计算证书评分
+                    cert_score = 0
+                    if days_until_expiry > 30:
+                        cert_score += 30
+                    elif days_until_expiry > 7:
+                        cert_score += 20
+                    else:
+                        cert_score += 10
+                    
+                    if 'Let\'s Encrypt' in results['cert_issuer'] or 'DigiCert' in results['cert_issuer']:
+                        cert_score += 20
+                    
+                    if 'AES' in results['cert_algorithm'] or 'ChaCha20' in results['cert_algorithm']:
+                        cert_score += 20
+                    
+                    if int(results['cert_strength']) >= 256:
+                        cert_score += 30
+                    elif int(results['cert_strength']) >= 128:
+                        cert_score += 20
+                    
+                    results['cert_score'] = min(100, cert_score)
+                    
+                    # SSL等级
+                    if results['cert_score'] >= 90:
+                        results['ssl_grade'] = 'A+'
+                    elif results['cert_score'] >= 80:
+                        results['ssl_grade'] = 'A'
+                    elif results['cert_score'] >= 70:
+                        results['ssl_grade'] = 'B'
+                    elif results['cert_score'] >= 60:
+                        results['ssl_grade'] = 'C'
+                    elif results['cert_score'] >= 50:
+                        results['ssl_grade'] = 'D'
+                    else:
+                        results['ssl_grade'] = 'F'
+        
+        except Exception as e:
+            results['error'] = str(e)
+        
+        return results
+    
+    def check_protocol_support(self, ip: str, domain: str) -> Dict:
+        """检查协议支持"""
+        results = {
+            'http_support': False,
+            'https_support': False,
+            'http2_support': False,
+            'http3_support': False,
+            'protocol_score': 0.0
+        }
+        
+        # HTTP支持
+        try:
+            response = requests.get(f"http://{ip}/", headers={'Host': domain}, timeout=5)
+            results['http_support'] = response.status_code in [200, 301, 302, 403]
+        except:
+            pass
+        
+        # HTTPS支持
+        try:
+            response = requests.get(f"https://{ip}/", headers={'Host': domain}, timeout=5, verify=False)
+            results['https_support'] = response.status_code in [200, 301, 302, 403]
+        except:
+            pass
+        
+        # HTTP/2支持（简化检测）
+        try:
+            response = requests.get(f"https://{ip}/", headers={'Host': domain}, timeout=5, verify=False)
+            if hasattr(response, 'raw') and hasattr(response.raw, 'version'):
+                results['http2_support'] = response.raw.version == 20
+        except:
+            pass
+        
+        # 计算协议评分
+        protocol_score = 0
+        if results['http_support']:
+            protocol_score += 25
+        if results['https_support']:
+            protocol_score += 50
+        if results['http2_support']:
+            protocol_score += 25
+        
+        results['protocol_score'] = protocol_score
+        return results
+    
+    def check_geographic_performance(self, ip: str) -> Dict:
+        """检查地理位置性能（基于IP段推断）"""
+        results = {
+            'region': 'Unknown',
+            'provider': 'Unknown',
+            'geo_score': 0.0
+        }
+        
+        # 简化的地理位置检测（基于IP段）
+        try:
+            # 这里可以集成IP地理位置API，现在使用简化版本
+            first_octet = int(ip.split('.')[0])
+            
+            if 1 <= first_octet <= 126:
+                results['region'] = 'Class A'
+            elif 128 <= first_octet <= 191:
+                results['region'] = 'Class B'
+            elif 192 <= first_octet <= 223:
+                results['region'] = 'Class C'
+            else:
+                results['region'] = 'Other'
+            
+            # 基于IP段推断提供商
+            if ip.startswith('89.187'):
+                results['provider'] = 'BIS Studio CDN'
+                results['geo_score'] = 0.9
+            elif ip.startswith('143.244'):
+                results['provider'] = 'Cloud Provider'
+                results['geo_score'] = 0.8
+            else:
+                results['geo_score'] = 0.5
+                
+        except:
+            pass
+        
+        return results
+    
+    def comprehensive_health_check(self, ip: str, domain: str) -> Dict:
+        """综合健康检查"""
+        health_results = {
+            'ip': ip,
+            'overall_health_score': 0.0,
+            'stability': {},
+            'bandwidth': {},
+            'ssl_quality': {},
+            'protocol_support': {},
+            'geographic': {},
+            'health_grade': 'F'
+        }
+        
+        # 并行执行各项检查
+        futures = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures['stability'] = executor.submit(self.check_connection_stability, ip)
+            futures['ssl_quality'] = executor.submit(self.check_ssl_quality, ip, domain)
+            futures['protocol_support'] = executor.submit(self.check_protocol_support, ip, domain)
+            futures['geographic'] = executor.submit(self.check_geographic_performance, ip)
+            
+            # 根据配置决定是否进行带宽测试
+            if self.config.get("enable_bandwidth_test", True):
+                futures['bandwidth'] = executor.submit(self.check_bandwidth, ip, domain)
+            else:
+                futures['bandwidth'] = executor.submit(lambda: {'bandwidth_score': 0.5, 'test_method': 'disabled'})
+            
+            for key, future in futures.items():
+                try:
+                    health_results[key] = future.result(timeout=15)
+                except Exception as e:
+                    health_results[key] = {'error': str(e)}
+        
+        # 计算综合健康评分
+        scores = []
+        
+        # 稳定性评分 (30%)
+        if 'stability_score' in health_results['stability']:
+            scores.append(health_results['stability']['stability_score'] * 0.3)
+        
+        # 带宽评分 (20%)
+        if 'bandwidth_score' in health_results['bandwidth']:
+            scores.append(health_results['bandwidth']['bandwidth_score'] * 0.2)
+        
+        # SSL质量评分 (25%)
+        if 'cert_score' in health_results['ssl_quality']:
+            scores.append(health_results['ssl_quality']['cert_score'] / 100 * 0.25)
+        
+        # 协议支持评分 (15%)
+        if 'protocol_score' in health_results['protocol_support']:
+            scores.append(health_results['protocol_support']['protocol_score'] / 100 * 0.15)
+        
+        # 地理位置评分 (10%)
+        if 'geo_score' in health_results['geographic']:
+            scores.append(health_results['geographic']['geo_score'] * 0.1)
+        
+        if scores:
+            health_results['overall_health_score'] = sum(scores) * 100
+            
+            # 健康等级
+            if health_results['overall_health_score'] >= 90:
+                health_results['health_grade'] = 'A+'
+            elif health_results['overall_health_score'] >= 80:
+                health_results['health_grade'] = 'A'
+            elif health_results['overall_health_score'] >= 70:
+                health_results['health_grade'] = 'B'
+            elif health_results['overall_health_score'] >= 60:
+                health_results['health_grade'] = 'C'
+            elif health_results['overall_health_score'] >= 50:
+                health_results['health_grade'] = 'D'
+            else:
+                health_results['health_grade'] = 'F'
+        
+        return health_results
+
+
+class SSLCertificateChecker:
+    """SSL证书检查器 - 使用正确的域名进行证书验证"""
+    
+    def __init__(self):
+        # 创建标准的SSL上下文
+        self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = True  # 检查主机名
+        self.ssl_context.verify_mode = ssl.CERT_REQUIRED  # 验证证书
+    
+    def check_ssl_certificate(self, ip: str, hostname: str = "ar-gcp-cdn.bistudio.com") -> Dict:
+        """检查SSL证书有效性 - 使用域名进行验证"""
+        try:
+            # 创建到IP的TCP连接
+            sock = socket.create_connection((ip, 443), timeout=5)
+            
+            # 使用域名进行SSL握手和证书验证
+            ssock = self.ssl_context.wrap_socket(sock, server_hostname=hostname)
+            
+            # 获取证书信息
+            cert = ssock.getpeercert()
+            
+            # 解析证书信息
+            cert_info = {
+                'valid': True,
+                'ssl_available': True,
+                'connection_successful': True,
+                'certificate_valid': True,
+                'hostname_verified': True
+            }
+            
+            if cert:
+                cert_info.update({
+                    'subject': dict(x[0] for x in cert['subject']) if cert.get('subject') else {},
+                    'issuer': dict(x[0] for x in cert['issuer']) if cert.get('issuer') else {},
+                    'not_before': cert.get('notBefore', 'Unknown'),
+                    'not_after': cert.get('notAfter', 'Unknown'),
+                    'serial_number': cert.get('serialNumber', 'Unknown'),
+                    'version': cert.get('version', 'Unknown'),
+                    'signature_algorithm': cert.get('signatureAlgorithm', 'Unknown'),
+                    'days_until_expiry': self._calculate_days_until_expiry(cert.get('notAfter', ''))
+                })
+                
+                # 检查证书是否包含正确的域名
+                if 'subjectAltName' in cert:
+                    san_list = cert['subjectAltName']
+                    domain_found = False
+                    for san_type, san_value in san_list:
+                        if san_type == 'DNS' and (hostname in san_value or san_value in hostname):
+                            domain_found = True
+                            break
+                    cert_info['domain_match'] = domain_found
+                else:
+                    # 检查subject中的CN
+                    subject = cert_info.get('subject', {})
+                    cn = subject.get('commonName', '')
+                    cert_info['domain_match'] = hostname in cn or cn in hostname
+            
+            ssock.close()
+            return cert_info
+            
+        except ssl.SSLError as e:
+            error_msg = str(e)
+            # 分析具体的SSL错误
+            if "certificate verify failed" in error_msg.lower():
+                return {
+                    'valid': False,
+                    'ssl_available': True,  # SSL连接可用
+                    'connection_successful': True,
+                    'certificate_valid': False,
+                    'hostname_verified': False,
+                    'error': "证书验证失败",
+                    'error_type': 'CERT_VERIFY_FAILED',
+                    'certificate_warning': '证书验证失败，可能是证书不匹配或过期'
+                }
+            elif "hostname doesn't match" in error_msg.lower():
+                return {
+                    'valid': False,
+                    'ssl_available': True,
+                    'connection_successful': True,
+                    'certificate_valid': True,
+                    'hostname_verified': False,
+                    'error': "主机名不匹配",
+                    'error_type': 'HOSTNAME_MISMATCH',
+                    'certificate_warning': '证书有效但主机名不匹配'
+                }
+            else:
+                return {
+                    'valid': False,
+                    'ssl_available': False,
+                    'connection_successful': False,
+                    'certificate_valid': False,
+                    'hostname_verified': False,
+                    'error': f"SSL错误: {error_msg[:50]}",
+                    'error_type': 'SSL_ERROR'
+                }
+        except socket.timeout:
+            return {
+                'valid': False,
+                'ssl_available': False,
+                'connection_successful': False,
+                'certificate_valid': False,
+                'hostname_verified': False,
+                'error': "连接超时",
+                'error_type': 'TIMEOUT'
+            }
+        except Exception as e:
+            return {
+                'valid': False,
+                'ssl_available': False,
+                'connection_successful': False,
+                'certificate_valid': False,
+                'hostname_verified': False,
+                'error': f"连接错误: {str(e)[:50]}",
+                'error_type': 'CONNECTION_ERROR'
+            }
+    
+    def _calculate_days_until_expiry(self, not_after: str) -> int:
+        """计算证书到期天数"""
+        if not not_after:
+            return -1
+        try:
+            # 尝试多种日期格式
+            formats = [
+                '%b %d %H:%M:%S %Y %Z',
+                '%b %d %H:%M:%S %Y',
+                '%Y-%m-%d %H:%M:%S'
+            ]
+            
+            for fmt in formats:
+                try:
+                    expiry_date = datetime.strptime(not_after, fmt)
+                    days_left = (expiry_date - datetime.now()).days
+                    return max(0, days_left)
+                except ValueError:
+                    continue
+            
+            return -1
+        except:
+            return -1
+
+
+class OptimizedTester:
+    """优化的测试器"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.connection_manager = OptimizedConnectionManager(config)
+        self.network_quality = NetworkQuality()
+        self.concurrency_manager = AdaptiveConcurrencyManager()
+        self.ssl_checker = SSLCertificateChecker()
+        self.health_checker = MultiDimensionalHealthChecker(config)
+        
+        # 根据配置调整设置
+        if config.get("fast_mode", True):
+            self.concurrency_manager.adaptive_mode = config.get("adaptive_concurrency", True)
+        else:
+            self.concurrency_manager.adaptive_mode = False
+    
+    def test_ips_optimized(self, ips: List[str]) -> List[Dict]:
+        """优化的IP测试"""
+        if not ips:
+            return []
+        
+        # 动态调整并发数
+        max_workers = self.concurrency_manager.get_optimal_workers(len(ips))
+        
+        print(f"使用 {max_workers} 个并发线程测试 {len(ips)} 个IP地址")
+        
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交测试任务
+            futures = {}
+            for ip in ips:
+                # 同时提交ping和HTTP测试
+                ping_future = executor.submit(self._ping_ip_fast, ip)
+                http_future = executor.submit(self._test_http_fast, ip)
+                futures[ip] = (ping_future, http_future)
+            
+            # 收集结果
+            for ip, (ping_future, http_future) in futures.items():
+                try:
+                    # 获取ping结果
+                    _, ping_latency, ping_success = ping_future.result(timeout=10)
+                    
+                    # 更新网络质量指标
+                    self.network_quality.update_metrics(ping_latency, ping_success)
+                    
+                    # 获取HTTP测试结果
+                    _, http_results = http_future.result(timeout=15)
+                    
+                    # 如果启用多维度健康检测，进行综合健康检查
+                    health_info = None
+                    if self.config.get("multi_dimensional_health", True):
+                        health_info = self.health_checker.comprehensive_health_check(ip, self.config.get("domain", "ar-gcp-cdn.bistudio.com"))
+                        
+                        # 根据健康评分调整总体评分
+                        if health_info.get('overall_health_score', 0) > 0:
+                            # 健康评分作为额外奖励
+                            health_bonus = health_info['overall_health_score'] * 0.5  # 健康评分50%作为奖励
+                            http_results['overall_score'] += health_bonus
+                    
+                    # 如果HTTPS可用且启用SSL检查，检查SSL证书
+                    ssl_cert_info = None
+                    if http_results['https_available'] and self.config.get("ssl_check_enabled", True):
+                        ssl_cert_info = self.ssl_checker.check_ssl_certificate(ip, self.config.get("domain", "ar-gcp-cdn.bistudio.com"))
+                        
+                        # 根据SSL证书状态调整评分
+                        if not ssl_cert_info.get('ssl_available', False):
+                            # SSL连接不可用，大幅降低评分
+                            http_results['overall_score'] = max(0, http_results['overall_score'] - 20)
+                        elif not ssl_cert_info.get('certificate_valid', False):
+                            # 证书无效，降低评分
+                            http_results['overall_score'] = max(0, http_results['overall_score'] - 15)
+                        elif not ssl_cert_info.get('hostname_verified', False):
+                            # 主机名不匹配，轻微降低评分
+                            http_results['overall_score'] = max(0, http_results['overall_score'] - 10)
+                        elif ssl_cert_info.get('certificate_warning'):
+                            # 有证书警告，轻微降低评分
+                            http_results['overall_score'] = max(0, http_results['overall_score'] - 5)
+                    
+                    # 合并结果
+                    result = {
+                        'ip': ip,
+                        'ping_latency': ping_latency,
+                        'ping_success': ping_success,
+                        'http_available': http_results['http_available'],
+                        'https_available': http_results['https_available'],
+                        'best_http_latency': http_results['best_http_latency'],
+                        'best_https_latency': http_results['best_https_latency'],
+                        'overall_score': http_results['overall_score'],
+                        'http_status': http_results['http_status'],
+                        'https_status': http_results['https_status'],
+                        'ssl_certificate': ssl_cert_info,
+                        'health_info': health_info
+                    }
+                    
+                    results.append(result)
+                    
+                    # 实时显示结果
+                    self._display_result(result)
+                    
+                except Exception as e:
+                    print(f"✗ {ip:15s} - 测试异常: {e}")
+                    results.append(self._create_failed_result(ip))
+        
+        # 清理连接池
+        self.connection_manager.cleanup()
+        
+        # 按评分排序
+        results.sort(key=lambda x: (-x['overall_score'], x['best_https_latency'], x['best_http_latency']))
+        return results
+    
+    def _ping_ip_fast(self, ip: str) -> Tuple[str, float, bool]:
+        """快速ping测试"""
+        try:
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.config["test_timeout"])
+            result = sock.connect_ex((ip, 80))
+            end_time = time.time()
+            sock.close()
+            
+            if result == 0:
+                latency = (end_time - start_time) * 1000
+                return ip, latency, True
+            else:
+                return ip, float('inf'), False
+        except Exception:
+            return ip, float('inf'), False
+    
+    def _test_http_fast(self, ip: str) -> Tuple[str, Dict]:
+        """快速HTTP测试"""
+        results = {
+            'ip': ip,
+            'http_status': {},
+            'https_status': {},
+            'best_http_latency': float('inf'),
+            'best_https_latency': float('inf'),
+            'http_available': False,
+            'https_available': False,
+            'overall_score': 0
+        }
+        
+        session = self.connection_manager.get_session(ip)
+        
+        # 只测试根路径，减少测试时间
+        test_paths = ["/"]
+        
+        # 测试HTTP
+        if self.config.get("test_http", True):
+            for path in test_paths:
+                url = f"http://{ip}{path}"
+                try:
+                    start_time = time.time()
+                    response = session.get(
+                        url, 
+                        timeout=self.config.get("http_timeout", 8),  # 减少超时时间
+                        headers={'Host': 'ar-gcp-cdn.bistudio.com'},
+                        allow_redirects=True,
+                        stream=False
+                    )
+                    end_time = time.time()
+                    latency = (end_time - start_time) * 1000
+                    
+                    status_code = response.status_code
+                    is_success = (200 <= status_code < 300) or (status_code == 403)
+                    
+                    results['http_status'][path] = {
+                        'status_code': status_code,
+                        'latency': latency,
+                        'success': is_success
+                    }
+                    
+                    if is_success and latency < results['best_http_latency']:
+                        results['best_http_latency'] = latency
+                        results['http_available'] = True
+                        
+                except Exception as e:
+                    results['http_status'][path] = {
+                        'status_code': 0,
+                        'latency': float('inf'),
+                        'success': False,
+                        'error': str(e)[:50]
+                    }
+        
+        # 测试HTTPS
+        if self.config.get("test_https", True):
+            for path in test_paths:
+                url = f"https://{ip}{path}"
+                try:
+                    start_time = time.time()
+                    
+                    # 智能SSL处理：先尝试严格验证，失败时提供详细错误信息
+                    verify_ssl = self.config.get("verify_ssl", True)
+                    response = session.get(
+                        url, 
+                        timeout=self.config.get("http_timeout", 8),
+                        headers={'Host': 'ar-gcp-cdn.bistudio.com'},
+                        allow_redirects=True,
+                        verify=verify_ssl,
+                        stream=False
+                    )
+                    end_time = time.time()
+                    latency = (end_time - start_time) * 1000
+                    
+                    status_code = response.status_code
+                    is_success = (200 <= status_code < 300) or (status_code == 403)
+                    
+                    results['https_status'][path] = {
+                        'status_code': status_code,
+                        'latency': latency,
+                        'success': is_success,
+                        'ssl_verified': verify_ssl
+                    }
+                    
+                    if is_success and latency < results['best_https_latency']:
+                        results['best_https_latency'] = latency
+                        results['https_available'] = True
+                        
+                except requests.exceptions.SSLError as e:
+                    # SSL验证失败，尝试不验证SSL（如果配置允许）
+                    if verify_ssl and self.config.get("fallback_to_unverified_ssl", True):
+                        try:
+                            start_time = time.time()
+                            response = session.get(
+                                url, 
+                                timeout=self.config.get("http_timeout", 8),
+                                headers={'Host': 'ar-gcp-cdn.bistudio.com'},
+                                allow_redirects=True,
+                                verify=False,  # 不验证SSL
+                                stream=False
+                            )
+                            end_time = time.time()
+                            latency = (end_time - start_time) * 1000
+                            
+                            status_code = response.status_code
+                            is_success = (200 <= status_code < 300) or (status_code == 403)
+                            
+                            results['https_status'][path] = {
+                                'status_code': status_code,
+                                'latency': latency,
+                                'success': is_success,
+                                'ssl_verified': False,
+                                'ssl_warning': f"SSL验证失败但连接可用: {str(e)[:30]}"
+                            }
+                            
+                            if is_success and latency < results['best_https_latency']:
+                                results['best_https_latency'] = latency
+                                results['https_available'] = True
+                                
+                        except Exception as e2:
+                            # 即使不验证SSL也失败
+                            results['https_status'][path] = {
+                                'status_code': 0,
+                                'latency': float('inf'),
+                                'success': False,
+                                'error': f"SSL连接失败: {str(e2)[:50]}",
+                                'ssl_verified': False
+                            }
+                    else:
+                        # 已经是不验证SSL，直接记录错误
+                        results['https_status'][path] = {
+                            'status_code': 0,
+                            'latency': float('inf'),
+                            'success': False,
+                            'error': f"SSL错误: {str(e)[:50]}",
+                            'ssl_verified': False
+                        }
+                except Exception as e:
+                    results['https_status'][path] = {
+                        'status_code': 0,
+                        'latency': float('inf'),
+                        'success': False,
+                        'error': str(e)[:50],
+                        'ssl_verified': verify_ssl
+                    }
+        
+        # 计算评分 - 优化版本，提供更大差异
+        score = 0
+        
+        # 获取评分权重配置
+        weights = self.config.get("scoring_weights", {
+            "http_base": 50,
+            "https_base": 80,
+            "ping_base": 20,
+            "protocol_complete_bonus": 30
+        })
+        
+        # 基础连接分数
+        if results['http_available']:
+            score += weights["http_base"]  # HTTP基础分
+            # HTTP延迟奖励分
+            if results['best_http_latency'] < 50:
+                score += 30
+            elif results['best_http_latency'] < 100:
+                score += 25
+            elif results['best_http_latency'] < 200:
+                score += 20
+            elif results['best_http_latency'] < 500:
+                score += 15
+            elif results['best_http_latency'] < 1000:
+                score += 10
+            else:
+                score += 5
+        
+        if results['https_available']:
+            score += weights["https_base"]  # HTTPS基础分（更高权重）
+            # HTTPS延迟奖励分
+            if results['best_https_latency'] < 50:
+                score += 40
+            elif results['best_https_latency'] < 100:
+                score += 35
+            elif results['best_https_latency'] < 200:
+                score += 30
+            elif results['best_https_latency'] < 500:
+                score += 25
+            elif results['best_https_latency'] < 1000:
+                score += 20
+            else:
+                score += 10
+        
+        # Ping延迟基础分（即使没有HTTP/HTTPS也有分数）
+        if results.get('ping_success', False):
+            ping_latency = results.get('ping_latency', float('inf'))
+            if ping_latency < 50:
+                score += weights["ping_base"]
+            elif ping_latency < 100:
+                score += int(weights["ping_base"] * 0.75)
+            elif ping_latency < 200:
+                score += int(weights["ping_base"] * 0.5)
+            elif ping_latency < 500:
+                score += int(weights["ping_base"] * 0.25)
+            else:
+                score += int(weights["ping_base"] * 0.1)
+        
+        # 协议完整性奖励
+        if results['http_available'] and results['https_available']:
+            score += weights["protocol_complete_bonus"]  # 同时支持HTTP和HTTPS的奖励
+        
+        results['overall_score'] = score
+        return ip, results
+    
+    def _display_result(self, result: Dict):
+        """实时显示测试结果"""
+        status_parts = []
+        if result['ping_success']:
+            status_parts.append(f"Ping: {result['ping_latency']:.1f}ms")
+        else:
+            status_parts.append("Ping: 失败")
+        
+        if result['http_available']:
+            status_parts.append(f"HTTP: {result['best_http_latency']:.1f}ms")
+        if result['https_available']:
+            https_info = f"HTTPS: {result['best_https_latency']:.1f}ms"
+            
+            # 检查HTTPS状态中的SSL信息
+            ssl_warning = None
+            ssl_verified = True
+            
+            # 从HTTPS状态中获取SSL信息
+            for path, status in result.get('https_status', {}).items():
+                if status.get('success', False):
+                    if not status.get('ssl_verified', True):
+                        ssl_verified = False
+                        ssl_warning = status.get('ssl_warning', 'SSL验证失败')
+                    break
+            
+            # 添加SSL证书状态
+            if result.get('ssl_certificate'):
+                ssl_cert = result['ssl_certificate']
+                if ssl_cert.get('ssl_available', False):
+                    if ssl_cert.get('certificate_valid', False) and ssl_cert.get('hostname_verified', False):
+                        # 证书有效且主机名匹配
+                        days_left = ssl_cert.get('days_until_expiry', -1)
+                        if days_left > 30:
+                            https_info += " (SSL✓)"
+                        elif days_left > 0:
+                            https_info += f" (SSL⚠{days_left}d)"
+                        else:
+                            https_info += " (SSL⚠过期)"
+                    elif ssl_cert.get('certificate_valid', False):
+                        # 证书有效但主机名不匹配
+                        https_info += " (SSL⚠主机名)"
+                    else:
+                        # 证书无效
+                        https_info += " (SSL⚠证书)"
+                else:
+                    # SSL连接不可用
+                    https_info += " (SSL✗)"
+            elif not ssl_verified:
+                # 基于HTTPS测试结果的SSL状态
+                https_info += " (SSL⚠)"
+            else:
+                # 默认SSL状态
+                https_info += " (SSL✓)"
+                
+            status_parts.append(https_info)
+        
+        # 添加评分等级显示
+        score = result['overall_score']
+        if score >= 200:
+            score_display = f"评分: {score} (优秀)"
+        elif score >= 150:
+            score_display = f"评分: {score} (良好)"
+        elif score >= 100:
+            score_display = f"评分: {score} (一般)"
+        elif score >= 50:
+            score_display = f"评分: {score} (较差)"
+        else:
+            score_display = f"评分: {score} (很差)"
+        
+        status_parts.append(score_display)
+        
+        # 添加健康检测信息
+        if result.get('health_info') and result['health_info'].get('overall_health_score', 0) > 0:
+            health_score = result['health_info']['overall_health_score']
+            health_grade = result['health_info'].get('health_grade', 'F')
+            status_parts.append(f"健康: {health_score:.1f} ({health_grade})")
+        
+        print(f"✓ {result['ip']:15s} - {' | '.join(status_parts)}")
+    
+    def _create_failed_result(self, ip: str) -> Dict:
+        """创建失败结果"""
+        return {
+            'ip': ip,
+            'ping_latency': float('inf'),
+            'ping_success': False,
+            'http_available': False,
+            'https_available': False,
+            'best_http_latency': float('inf'),
+            'best_https_latency': float('inf'),
+            'overall_score': 0,
+            'http_status': {},
+            'https_status': {},
+            'ssl_certificate': None
+        }
 
 
 class HostsOptimizer:
@@ -67,6 +1151,7 @@ class HostsOptimizer:
     def load_config(self):
         """加载配置文件"""
         default_config = {
+            "domain": "ar-gcp-cdn.bistudio.com",  # 目标域名
             "test_ips": [],  # 将自动获取真实IP
             "test_timeout": 5,
             "test_count": 3,
@@ -79,16 +1164,30 @@ class HostsOptimizer:
             ],
             "test_http": True,
             "test_https": True,
-            "http_timeout": 10,
-            "verify_ssl": False,
+            "http_timeout": 8,  # 减少默认超时时间
+            "verify_ssl": True,  # 默认启用SSL验证
+            "ssl_check_enabled": True,  # 启用SSL连接检查
+            "fallback_to_unverified_ssl": True,  # SSL验证失败时回退到不验证SSL
+            "scoring_weights": {  # 评分权重配置
+                "http_base": 50,      # HTTP基础分
+                "https_base": 80,     # HTTPS基础分
+                "ping_base": 20,      # Ping基础分
+                "protocol_complete_bonus": 30  # 协议完整性奖励
+            },
+            "multi_dimensional_health": True,  # 启用多维度健康检测
+            "health_test_iterations": 3,      # 健康检测测试次数
+            "stability_threshold": 0.8,       # 稳定性阈值
+            "enable_bandwidth_test": True,    # 启用带宽测试
             "test_paths": [
-                "/",
-                "/api/health",
-                "/status",
-                "/ping"
+                "/"  # 只测试根路径，提高速度
             ],
             "show_detailed_results": True,
-            "max_workers": 10
+            "max_workers": 10,
+            "adaptive_concurrency": True,  # 启用自适应并发
+            "fast_mode": True,  # 启用快速模式
+            "connection_pool_size": 20,  # 连接池大小
+            "retry_attempts": 2,  # 重试次数
+            "network_quality_monitoring": True  # 网络质量监控
         }
         
         if os.path.exists(self.config_file):
@@ -436,85 +1535,12 @@ class HostsOptimizer:
             return []
         
         print(f"开始测试 {len(ips)} 个 IP 地址...")
-        print("测试项目: Ping延迟 + HTTP状态码")
+        print("测试项目: Ping延迟 + HTTP状态码 + SSL连接")
         print()
         
-        results = []
-        
-        with ThreadPoolExecutor(max_workers=self.config.get("max_workers", 10)) as executor:
-            # 提交所有测试任务
-            futures = {}
-            for ip in ips:
-                # 同时提交 ping 和 HTTP 测试
-                ping_future = executor.submit(self.ping_ip, ip)
-                http_future = executor.submit(self.test_http_status, ip)
-                futures[ip] = (ping_future, http_future)
-            
-            # 收集结果
-            for ip, (ping_future, http_future) in futures.items():
-                try:
-                    # 获取 ping 结果
-                    _, ping_latency, ping_success = ping_future.result()
-                    
-                    # 获取 HTTP 测试结果
-                    _, http_results = http_future.result()
-                    
-                    # 合并结果
-                    result = {
-                        'ip': ip,
-                        'ping_latency': ping_latency,
-                        'ping_success': ping_success,
-                        'http_available': http_results['http_available'],
-                        'https_available': http_results['https_available'],
-                        'best_http_latency': http_results['best_http_latency'],
-                        'best_https_latency': http_results['best_https_latency'],
-                        'overall_score': http_results['overall_score'],
-                        'http_status': http_results['http_status'],
-                        'https_status': http_results['https_status']
-                    }
-                    
-                    results.append(result)
-                    
-                    # 显示测试结果
-                    status_parts = []
-                    if ping_success:
-                        status_parts.append(f"Ping: {ping_latency:.1f}ms")
-                    else:
-                        status_parts.append("Ping: 失败")
-                    
-                    if http_results['http_available']:
-                        status_parts.append(f"HTTP: {http_results['best_http_latency']:.1f}ms")
-                    else:
-                        status_parts.append("HTTP: 不可用")
-                    
-                    if http_results['https_available']:
-                        status_parts.append(f"HTTPS: {http_results['best_https_latency']:.1f}ms")
-                    else:
-                        status_parts.append("HTTPS: 不可用")
-                    
-                    status_parts.append(f"评分: {http_results['overall_score']}")
-                    
-                    print(f"✓ {ip:15s} - {' | '.join(status_parts)}")
-                    
-                except Exception as e:
-                    print(f"✗ {ip:15s} - 测试异常: {e}")
-                    results.append({
-                        'ip': ip,
-                        'ping_latency': float('inf'),
-                        'ping_success': False,
-                        'http_available': False,
-                        'https_available': False,
-                        'best_http_latency': float('inf'),
-                        'best_https_latency': float('inf'),
-                        'overall_score': 0,
-                        'http_status': {},
-                        'https_status': {}
-                    })
-        
-        # 按综合评分排序，评分相同时按延迟排序
-        results.sort(key=lambda x: (-x['overall_score'], x['best_https_latency'], x['best_http_latency'], x['ping_latency']))
-        self.test_results = results
-        return results
+        # 使用优化的测试器
+        optimized_tester = OptimizedTester(self.config)
+        return optimized_tester.test_ips_optimized(ips)
     
     def backup_hosts(self):
         """备份 hosts 文件"""
@@ -529,6 +1555,7 @@ class HostsOptimizer:
             print(f"Hosts 文件已备份到: {backup_path}")
         except Exception as e:
             print(f"备份 hosts 文件失败: {e}")
+            raise  # 重新抛出异常，让GUI能够捕获
     
     def update_hosts(self, best_ip: str):
         """更新 hosts 文件"""
@@ -552,11 +1579,13 @@ class HostsOptimizer:
             
             print(f"✓ Hosts 文件已更新: {best_ip} {self.domain}")
             
-        except PermissionError:
+        except PermissionError as e:
             print("❌ 权限不足，无法修改 hosts 文件")
             print("请以管理员身份运行此脚本")
+            raise  # 重新抛出异常，让GUI能够捕获
         except Exception as e:
             print(f"❌ 更新 hosts 文件失败: {e}")
+            raise  # 重新抛出异常，让GUI能够捕获
     
     def flush_dns(self):
         """刷新 DNS 缓存"""
@@ -573,6 +1602,7 @@ class HostsOptimizer:
                 print("✓ DNS 缓存已刷新")
         except Exception as e:
             print(f"⚠️ 刷新 DNS 缓存失败: {e}")
+            # DNS刷新失败不应该阻止整个流程，所以不抛出异常
     
     def run_optimization(self):
         """运行完整的优化流程"""
@@ -645,12 +1675,126 @@ class HostsOptimizer:
                         if status['success']:
                             size_info = f" ({status.get('response_size', 0)} bytes)" if status.get('response_size', 0) > 0 else ""
                             status_desc = self._get_status_description(status['status_code'])
-                            print(f"      {path}: {status['status_code']} {status_desc} ({status['latency']:.1f}ms){size_info}")
+                            ssl_info = f" (SSL验证: {'✓' if status.get('ssl_verified', True) else '✗'})" if 'ssl_verified' in status else ""
+                            ssl_warning_info = f" - {status.get('ssl_warning', '')}" if status.get('ssl_warning') else ""
+                            print(f"      {path}: {status['status_code']} {status_desc} ({status['latency']:.1f}ms){size_info}{ssl_info}{ssl_warning_info}")
                         elif status.get('is_redirect', False):
                             print(f"      {path}: {status['status_code']} 重定向 (可能配置问题)")
                         else:
                             error_msg = status.get('error', '连接失败')
                             print(f"      {path}: 失败 - {error_msg}")
+                
+                # 显示SSL证书信息
+                if result.get('ssl_certificate'):
+                    ssl_cert = result['ssl_certificate']
+                    print(f"    SSL 证书信息:")
+                    
+                    if ssl_cert.get('ssl_available', False):
+                        print(f"      SSL连接: 可用 ✓")
+                        
+                        # 证书有效性
+                        if ssl_cert.get('certificate_valid', False):
+                            print(f"      证书有效性: 有效 ✓")
+                        else:
+                            print(f"      证书有效性: 无效 ✗")
+                        
+                        # 主机名验证
+                        if ssl_cert.get('hostname_verified', False):
+                            print(f"      主机名验证: 匹配 ✓")
+                        else:
+                            print(f"      主机名验证: 不匹配 ✗")
+                        
+                        # 域名匹配检查
+                        if ssl_cert.get('domain_match', False):
+                            print(f"      域名匹配: 匹配 ✓")
+                        else:
+                            print(f"      域名匹配: 不匹配 ✗")
+                        
+                        # 显示证书详情（如果可用）
+                        if ssl_cert.get('issuer'):
+                            issuer = ssl_cert.get('issuer', {})
+                            org_name = issuer.get('organizationName', issuer.get('commonName', 'Unknown'))
+                            print(f"      颁发者: {org_name}")
+                        
+                        if ssl_cert.get('not_after'):
+                            print(f"      有效期至: {ssl_cert.get('not_after', 'Unknown')}")
+                            days_left = ssl_cert.get('days_until_expiry', -1)
+                            if days_left > 0:
+                                print(f"      剩余天数: {days_left} 天")
+                            elif days_left == 0:
+                                print(f"      证书今天过期")
+                            else:
+                                print(f"      证书已过期")
+                        
+                        # 显示警告信息
+                        if ssl_cert.get('certificate_warning'):
+                            print(f"      警告: {ssl_cert.get('certificate_warning')}")
+                    else:
+                        print(f"      SSL连接: 不可用 ✗")
+                        print(f"      错误: {ssl_cert.get('error', 'Unknown error')}")
+                        print(f"      错误类型: {ssl_cert.get('error_type', 'Unknown')}")
+                
+                # 显示健康检测详细信息
+                if result.get('health_info'):
+                    health_info = result['health_info']
+                    print(f"    健康检测详情:")
+                    print(f"      综合健康评分: {health_info.get('overall_health_score', 0):.1f} ({health_info.get('health_grade', 'F')})")
+                    
+                    # 稳定性信息
+                    if health_info.get('stability'):
+                        stability = health_info['stability']
+                        print(f"      连接稳定性: {stability.get('stability_score', 0):.2f}")
+                        print(f"      成功率: {stability.get('success_rate', 0):.1%}")
+                        print(f"      平均延迟: {stability.get('avg_latency', 0):.1f}ms")
+                        print(f"      延迟标准差: {stability.get('latency_std', 0):.1f}ms")
+                    
+                    # 带宽信息
+                    if health_info.get('bandwidth'):
+                        bandwidth = health_info['bandwidth']
+                        test_method = bandwidth.get('test_method', 'unknown')
+                        if test_method == 'bandwidth_calculated':
+                            print(f"      带宽测试: {bandwidth.get('bandwidth_mbps', 0):.2f} Mbps")
+                            print(f"      响应时间: {bandwidth.get('response_time', 0):.2f}s")
+                            print(f"      数据大小: {bandwidth.get('data_size', 0)} bytes")
+                        elif test_method == 'response_based':
+                            print(f"      响应测试: {bandwidth.get('response_time', 0):.2f}s")
+                            print(f"      数据大小: {bandwidth.get('data_size', 0)} bytes")
+                            print(f"      测试方法: 响应时间评估")
+                        elif test_method == 'latency_based':
+                            print(f"      连接延迟: {bandwidth.get('response_time', 0):.3f}s")
+                            print(f"      测试方法: 连接延迟评估")
+                        elif test_method == 'disabled':
+                            print(f"      带宽测试: 已禁用")
+                            print(f"      网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f} (默认)")
+                        else:
+                            print(f"      网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f}")
+                            if bandwidth.get('error'):
+                                print(f"      错误: {bandwidth.get('error')}")
+                    
+                    # SSL质量信息
+                    if health_info.get('ssl_quality'):
+                        ssl_quality = health_info['ssl_quality']
+                        if ssl_quality.get('cert_score', 0) > 0:
+                            print(f"      SSL质量评分: {ssl_quality.get('cert_score', 0):.1f} ({ssl_quality.get('ssl_grade', 'F')})")
+                            print(f"      证书有效期: {ssl_quality.get('cert_validity_days', 0)} 天")
+                            print(f"      证书颁发者: {ssl_quality.get('cert_issuer', 'Unknown')}")
+                            print(f"      加密算法: {ssl_quality.get('cert_algorithm', 'Unknown')}")
+                            print(f"      加密强度: {ssl_quality.get('cert_strength', 'Unknown')} bits")
+                    
+                    # 协议支持信息
+                    if health_info.get('protocol_support'):
+                        protocol = health_info['protocol_support']
+                        print(f"      协议支持评分: {protocol.get('protocol_score', 0):.1f}")
+                        print(f"      HTTP支持: {'✓' if protocol.get('http_support') else '✗'}")
+                        print(f"      HTTPS支持: {'✓' if protocol.get('https_support') else '✗'}")
+                        print(f"      HTTP/2支持: {'✓' if protocol.get('http2_support') else '✗'}")
+                    
+                    # 地理位置信息
+                    if health_info.get('geographic'):
+                        geo = health_info['geographic']
+                        print(f"      地理位置评分: {geo.get('geo_score', 0):.2f}")
+                        print(f"      网络区域: {geo.get('region', 'Unknown')}")
+                        print(f"      服务提供商: {geo.get('provider', 'Unknown')}")
             print()
         
         best_result = available_results[0]

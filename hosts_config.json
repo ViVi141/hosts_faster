@@ -1,4 +1,5 @@
 {
+  "domain": "ar-gcp-cdn.bistudio.com",
   "test_ips": [],
   "test_timeout": 5,
   "test_count": 3,
@@ -11,12 +12,28 @@
   ],
   "test_http": true,
   "test_https": true,
-  "http_timeout": 10,
-  "verify_ssl": false,
+  "http_timeout": 8,
+  "verify_ssl": true,
+  "ssl_check_enabled": true,
+  "fallback_to_unverified_ssl": true,
+  "scoring_weights": {
+    "http_base": 50,
+    "https_base": 80,
+    "ping_base": 20,
+    "protocol_complete_bonus": 30
+  },
+  "multi_dimensional_health": true,
+  "health_test_iterations": 3,
+  "stability_threshold": 0.8,
+  "enable_bandwidth_test": true,
   "test_paths": [
-    "/",
-    "/api/health",
-    "/status",
-    "/ping"
-  ]
+    "/"
+  ],
+  "show_detailed_results": true,
+  "max_workers": 10,
+  "adaptive_concurrency": true,
+  "fast_mode": true,
+  "connection_pool_size": 20,
+  "retry_attempts": 2,
+  "network_quality_monitoring": true
 }

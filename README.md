@@ -1,4 +1,4 @@
-# Arma Reforger 创意工坊修复工具 v1.0.0
+# Arma Reforger 创意工坊修复工具 v1.1.0
 
 专门为《Arma Reforger》玩家设计的 DNS 污染和劫持修复工具。当玩家在下载创意工坊内容时遇到 DNS 污染、劫持或连接错误时，此工具可以自动测试并选择最优的 `ar-gcp-cdn.bistudio.com` IP 地址，修复下载问题。
 
@@ -8,10 +8,14 @@
 - 🔍 **自动获取真实IP**: 使用多种方法获取 `ar-gcp-cdn.bistudio.com` 的真实 IP 地址
 - 🚀 **并行测试**: 使用多线程并行测试多个 IP 地址，快速找到可用节点
 - 📊 **多维度测试**: 同时测试 Ping 延迟和 HTTP/HTTPS 状态码，确保连接稳定
-- 🎯 **智能评分**: 基于 HTTP 可用性、延迟和协议类型综合评分，选择最佳节点
+- 🔒 **SSL证书验证**: 使用正确的域名验证SSL证书有效性，确保连接安全性
+- 🎯 **智能评分**: 基于 HTTP/HTTPS 可用性、延迟、SSL证书状态和协议完整性综合评分，提供明显的优劣区分
+- 🔬 **多维度健康检测**: 连接稳定性、带宽测试、SSL质量、协议支持、地理位置等多维度综合评估
+- 📈 **实时进度显示**: 详细的测试进度跟踪，包含时间估算和当前状态
+- 🎨 **增强GUI界面**: 改进的用户界面，显示更多检测属性和统计信息
+- 📋 **完整结果展示**: 显示所有可用IP地址，不再限制显示数量
 - 🔄 **自动备份**: 更新前自动备份原始 hosts 文件，确保安全
-- 🖥️ **GUI界面**: 提供友好的图形用户界面，操作简单直观
-- 🔧 **跨平台**: 支持 Windows、macOS 和 Linux 系统
+- 🖥️ **跨平台**: 支持 Windows、macOS 和 Linux 系统
 
 ## 安装和使用
 
@@ -40,6 +44,7 @@ python hosts_optimizer.py
 
 ```json
 {
+  "domain": "ar-gcp-cdn.bistudio.com",
   "test_ips": [],
   "test_timeout": 5,
   "backup_hosts": true,
@@ -51,16 +56,30 @@ python hosts_optimizer.py
   ],
   "test_http": true,
   "test_https": true,
-  "http_timeout": 10,
-  "verify_ssl": false,
+  "http_timeout": 8,
+  "verify_ssl": true,
+  "ssl_check_enabled": true,
+  "fallback_to_unverified_ssl": true,
+  "scoring_weights": {
+    "http_base": 50,
+    "https_base": 80,
+    "ping_base": 20,
+    "protocol_complete_bonus": 30
+  },
+  "multi_dimensional_health": true,
+  "health_test_iterations": 3,
+  "stability_threshold": 0.8,
+  "enable_bandwidth_test": true,
   "test_paths": [
-    "/",
-    "/api/health",
-    "/status",
-    "/ping"
+    "/"
   ],
   "show_detailed_results": true,
-  "max_workers": 10
+  "max_workers": 10,
+  "adaptive_concurrency": true,
+  "fast_mode": true,
+  "connection_pool_size": 20,
+  "retry_attempts": 2,
+  "network_quality_monitoring": true
 }
 ```
 
@@ -68,9 +87,13 @@ python hosts_optimizer.py
 
 1. **IP 地址获取**: 使用多种方法获取 `ar-gcp-cdn.bistudio.com` 的真实 IP 地址，绕过 DNS 污染
 2. **多维度测试**: 对每个 IP 地址进行 Ping 延迟和 HTTP/HTTPS 状态码测试，确保节点可用
-3. **智能评分**: 基于可用性、延迟和协议类型计算综合评分，选择最佳下载节点
-4. **结果排序**: 按综合评分排序，评分相同时按延迟排序
-5. **文件更新**: 将最优 IP 地址写入 hosts 文件，修复创意工坊下载问题
+3. **SSL证书验证**: 使用正确的域名验证HTTPS连接的SSL证书有效性，确保连接安全性
+4. **智能评分**: 基于可用性、延迟、SSL证书状态和协议完整性计算综合评分，提供明显的优劣区分
+5. **多维度健康检测**: 并行检测连接稳定性、带宽、SSL质量、协议支持和地理位置，提供全面的网络质量评估
+6. **实时进度跟踪**: 显示详细的测试进度，包含时间估算和当前状态，提供更好的用户体验
+7. **完整结果展示**: 显示所有可用的IP地址，按综合评分排序，不再限制显示数量
+8. **结果排序**: 按综合评分排序，评分相同时按延迟排序
+9. **文件更新**: 将最优 IP 地址写入 hosts 文件，修复创意工坊下载问题
 
 ## 适用场景
 
@@ -95,6 +118,15 @@ python hosts_optimizer.py
 此项目使用 GNU General Public License v2.0 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 版本历史
+
+- **v1.1.0** (2025-09-08): 重大功能更新
+  - 🎨 **GUI界面全面升级**: 新增更多检测属性列，包括SSL状态、HTTP/2支持、带宽、稳定性等
+  - 📈 **实时进度显示**: 添加详细的测试进度跟踪，包含时间估算和当前状态指示器
+  - 📋 **完整结果展示**: 显示所有可用IP地址，移除20个IP的显示限制
+  - 🔧 **性能优化**: 改进测试流程，优化资源使用和响应速度
+  - 🛠️ **错误修复**: 修复健康检查结果显示问题，改进SSL和HTTP/2状态检测
+  - 📊 **统计信息增强**: 添加更详细的测试统计和结果预览功能
+  - ⚠️ **用户体验改进**: 添加带宽测试说明，明确测试用途和局限性
 
 - **v1.0.0** (2025-09-08): 首次正式发布
   - 专门为 Arma Reforger 玩家设计的 DNS 修复工具
