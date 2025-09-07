@@ -1,0 +1,22 @@
+{
+  "test_ips": [],
+  "test_timeout": 5,
+  "test_count": 3,
+  "backup_hosts": true,
+  "dns_servers": [
+    "8.8.8.8",
+    "1.1.1.1",
+    "208.67.222.222",
+    "114.114.114.114"
+  ],
+  "test_http": true,
+  "test_https": true,
+  "http_timeout": 10,
+  "verify_ssl": false,
+  "test_paths": [
+    "/",
+    "/api/health",
+    "/status",
+    "/ping"
+  ]
+}
