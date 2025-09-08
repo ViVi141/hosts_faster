@@ -376,7 +376,7 @@ class MultiDimensionalHealthChecker:
         results = {
             'http_support': False,
             'https_support': False,
-            'http2_support': False,
+            'http2_support': False,  # 保留字段但不再检测
             'http3_support': False,
             'protocol_score': 0.0
         }
@@ -395,13 +395,8 @@ class MultiDimensionalHealthChecker:
         except:
             pass
         
-        # HTTP/2支持（简化检测）
-        try:
-            response = requests.get(f"https://{ip}/", headers={'Host': domain}, timeout=5, verify=False)
-            if hasattr(response, 'raw') and hasattr(response.raw, 'version'):
-                results['http2_support'] = response.raw.version == 20
-        except:
-            pass
+        # HTTP/2支持检测已取消
+        # 不再进行HTTP/2检测以提高性能
         
         # 计算协议评分
         protocol_score = 0
@@ -409,8 +404,7 @@ class MultiDimensionalHealthChecker:
             protocol_score += 25
         if results['https_support']:
             protocol_score += 50
-        if results['http2_support']:
-            protocol_score += 25
+        # HTTP/2评分已移除
         
         results['protocol_score'] = protocol_score
         return results
@@ -686,7 +680,7 @@ class OptimizedTester:
         else:
             self.concurrency_manager.adaptive_mode = False
     
-    def test_ips_optimized(self, ips: List[str]) -> List[Dict]:
+    def test_ips_optimized(self, ips: List[str], progress_callback=None) -> List[Dict]:
         """优化的IP测试"""
         if not ips:
             return []
@@ -697,6 +691,7 @@ class OptimizedTester:
         print(f"使用 {max_workers} 个并发线程测试 {len(ips)} 个IP地址")
         
         results = []
+        completed_count = 0
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交测试任务
@@ -766,6 +761,11 @@ class OptimizedTester:
                     }
                     
                     results.append(result)
+                    completed_count += 1
+                    
+                    # 调用进度回调
+                    if progress_callback:
+                        progress_callback(completed_count, len(ips), f"已测试 {completed_count}/{len(ips)} 个IP")
                     
                     # 实时显示结果
                     self._display_result(result)
@@ -773,6 +773,11 @@ class OptimizedTester:
                 except Exception as e:
                     print(f"✗ {ip:15s} - 测试异常: {e}")
                     results.append(self._create_failed_result(ip))
+                    completed_count += 1
+                    
+                    # 即使失败也要更新进度
+                    if progress_callback:
+                        progress_callback(completed_count, len(ips), f"已测试 {completed_count}/{len(ips)} 个IP")
         
         # 清理连接池
         self.connection_manager.cleanup()

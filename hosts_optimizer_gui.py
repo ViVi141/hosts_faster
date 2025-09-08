@@ -16,6 +16,14 @@ from typing import List, Dict
 import json
 from hosts_optimizer import HostsOptimizer
 
+# 检查管理员权限
+try:
+    from admin_check import check_admin_privileges
+    check_admin_privileges()
+except ImportError:
+    print("警告: 无法导入管理员权限检查模块")
+    print("程序可能无法修改hosts文件")
+
 
 class HostsOptimizerGUI:
     """Hosts 选优工具 GUI 界面"""
@@ -141,7 +149,7 @@ class HostsOptimizerGUI:
         # 结果树形视图
         self.results_tree = ttk.Treeview(
             self.results_frame,
-            columns=("ip", "ping", "http", "https", "ssl", "http2", "bandwidth", "stability", "health", "score"),
+            columns=("ip", "ping", "http", "https", "ssl", "bandwidth", "stability", "health", "score"),
             show="headings",
             height=8
         )
@@ -152,7 +160,6 @@ class HostsOptimizerGUI:
         self.results_tree.heading("http", text="HTTP 延迟")
         self.results_tree.heading("https", text="HTTPS 延迟")
         self.results_tree.heading("ssl", text="SSL 状态")
-        self.results_tree.heading("http2", text="HTTP/2")
         self.results_tree.heading("bandwidth", text="带宽")
         self.results_tree.heading("stability", text="稳定性")
         self.results_tree.heading("health", text="健康等级")
@@ -164,7 +171,6 @@ class HostsOptimizerGUI:
         self.results_tree.column("http", width=80)
         self.results_tree.column("https", width=80)
         self.results_tree.column("ssl", width=80)
-        self.results_tree.column("http2", width=70)
         self.results_tree.column("bandwidth", width=80)
         self.results_tree.column("stability", width=80)
         self.results_tree.column("health", width=80)
@@ -542,9 +548,14 @@ class HostsOptimizerGUI:
         # 更新进度显示
         self.update_progress("IP测试", 0, len(ips), "开始批量测试")
         
+        # 定义进度回调函数
+        def progress_callback(current, total, detail):
+            # 在主线程中更新进度
+            self.root.after(0, lambda: self.update_progress("IP测试", current, total, detail))
+        
         try:
-            # 使用OptimizedTester的test_ips_optimized方法
-            results = optimized_tester.test_ips_optimized(ips)
+            # 使用OptimizedTester的test_ips_optimized方法，传入进度回调
+            results = optimized_tester.test_ips_optimized(ips, progress_callback)
             
             # 统计可用IP数量
             available_count = len([r for r in results if r.get('http_available', False) or r.get('https_available', False)])
@@ -611,18 +622,8 @@ class HostsOptimizerGUI:
             else:
                 ssl_text = "✗ 无HTTPS"
             
-            # HTTP/2支持显示
-            http2_text = "N/A"
-            if result.get('http_available', False) or result.get('https_available', False):
-                # 检查协议支持信息
-                health_info = result.get('health_info', {})
-                protocol_support = health_info.get('protocol_support', {})
-                if protocol_support.get('http2_support', False):
-                    http2_text = "✓ 支持"
-                else:
-                    http2_text = "✗ 不支持"
-            else:
-                http2_text = "✗ 无连接"
+            # HTTP/2支持已取消检测
+            # 不再显示HTTP/2相关信息
             
             # 带宽显示
             bandwidth_text = "N/A"
@@ -687,7 +688,6 @@ class HostsOptimizerGUI:
                 http_text,             # HTTP 延迟
                 https_text,            # HTTPS 延迟
                 ssl_text,              # SSL 状态
-                http2_text,            # HTTP/2
                 bandwidth_text,        # 带宽
                 stability_text,        # 稳定性
                 health_text,           # 健康等级
@@ -746,9 +746,8 @@ class HostsOptimizerGUI:
             http_ok = "✓" if result.get('http_available', False) else "✗"
             https_ok = "✓" if result.get('https_available', False) else "✗"
             ssl_ok = "✓" if result.get('ssl_valid', False) else "✗"
-            http2_ok = "✓" if result.get('http2_support', False) else "✗"
             
-            preview_content += f"   {i+1}. {ip} | 评分: {score:.1f} | Ping: {ping:.1f}ms | HTTP: {http_ok} | HTTPS: {https_ok} | SSL: {ssl_ok} | HTTP/2: {http2_ok}\n"
+            preview_content += f"   {i+1}. {ip} | 评分: {score:.1f} | Ping: {ping:.1f}ms | HTTP: {http_ok} | HTTPS: {https_ok} | SSL: {ssl_ok}\n"
         
         preview_content += f"\n💡 建议:\n"
         if sorted_results:
@@ -801,7 +800,6 @@ class HostsOptimizerGUI:
         
         # 添加新的检测属性
         details += f"SSL 状态: {'有效' if result.get('ssl_valid', False) else '无效/无HTTPS'}\n"
-        details += f"HTTP/2 支持: {'是' if result.get('http2_support', False) else '否'}\n"
         details += f"综合评分: {result['overall_score']:.1f}\n\n"
         
         # 健康检测信息
@@ -862,8 +860,7 @@ class HostsOptimizerGUI:
                 details += "协议支持:\n"
                 details += f"  协议支持评分: {protocol.get('protocol_score', 0):.1f}\n"
                 details += f"  HTTP支持: {'✓' if protocol.get('http_support') else '✗'}\n"
-                details += f"  HTTPS支持: {'✓' if protocol.get('https_support') else '✗'}\n"
-                details += f"  HTTP/2支持: {'✓' if protocol.get('http2_support') else '✗'}\n\n"
+                details += f"  HTTPS支持: {'✓' if protocol.get('https_support') else '✗'}\n\n"
             
             # 地理位置信息
             if health_info.get('geographic'):
@@ -1066,7 +1063,7 @@ class HostsOptimizerGUI:
         """显示关于对话框"""
         about_text = """Arma Reforger 创意工坊修复工具
 
-版本: 2.0.0
+版本: 1.2.0
 目标域名: ar-gcp-cdn.bistudio.com
 
 功能特点:
