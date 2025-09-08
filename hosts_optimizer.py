@@ -29,6 +29,320 @@ import socket
 from datetime import datetime
 
 
+class EnhancedDNSResolver:
+    """增强的DNS解析器"""
+    
+    def __init__(self, domain: str):
+        self.domain = domain
+        self.found_ips = set()
+        self.dns_cache = {}  # DNS查询缓存
+        self.verified_ips = set()  # 已验证的IP
+        
+    def resolve_all_ips(self) -> List[str]:
+        """使用所有可用的方法解析域名IP（避免本地DNS）"""
+        print(f"正在全面解析 {self.domain} 的IP地址...")
+        print("⚠️ 注意：为避免DNS污染，不使用本地DNS解析")
+        
+        # 并行执行所有解析方法（移除系统DNS）
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            futures = [
+                executor.submit(self._resolve_public_dns),
+                executor.submit(self._resolve_http_dns),
+                executor.submit(self._resolve_command_line),
+                executor.submit(self._resolve_powershell),
+                executor.submit(self._resolve_dig),
+                executor.submit(self._resolve_alternative_methods),
+                executor.submit(self._resolve_international_dns),
+                executor.submit(self._resolve_secure_dns)
+            ]
+            
+            for future in as_completed(futures):
+                try:
+                    future.result(timeout=8)  # 减少超时时间
+                except Exception:
+                    continue
+        
+        # 验证找到的IP地址
+        self._verify_found_ips()
+        
+        ip_list = list(self.found_ips)
+        print(f"\n总共找到 {len(ip_list)} 个唯一IP地址:")
+        for i, ip in enumerate(ip_list, 1):
+            print(f"{i:2d}. {ip}")
+        
+        return ip_list
+    
+    def _verify_found_ips(self):
+        """验证找到的IP地址是否真实有效（快速模式）"""
+        print("\n正在快速验证IP地址有效性...")
+        
+        def verify_single_ip(ip):
+            try:
+                # 尝试连接到IP的80端口，使用更短的超时时间
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)  # 减少超时时间
+                result = sock.connect_ex((ip, 80))
+                sock.close()
+                
+                if result == 0:
+                    self.verified_ips.add(ip)
+                    print(f"✓ 验证通过: {ip}")
+                    return True
+                else:
+                    print(f"✗ 验证失败: {ip}")
+                    return False
+            except Exception:
+                print(f"✗ 验证失败: {ip}")
+                return False
+        
+        # 并行验证IP地址，增加并发数
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = {executor.submit(verify_single_ip, ip): ip for ip in self.found_ips}
+            
+            for future in as_completed(futures):
+                try:
+                    future.result(timeout=2)  # 减少超时时间
+                except Exception:
+                    continue
+        
+        # 只保留验证通过的IP
+        self.found_ips = self.verified_ips
+        print(f"验证完成，有效IP数量: {len(self.found_ips)}")
+    
+    def _resolve_public_dns(self):
+        """公共DNS服务器解析"""
+        dns_servers = [
+            # Google DNS
+            "8.8.8.8", "8.8.4.4",
+            # Cloudflare DNS
+            "1.1.1.1", "1.0.0.1",
+            # OpenDNS
+            "208.67.222.222", "208.67.220.220",
+            # Quad9 DNS
+            "9.9.9.9", "149.112.112.112",
+            # 国内DNS
+            "114.114.114.114", "114.114.115.115",
+            "223.5.5.5", "223.6.6.6",
+            "180.76.76.76", "119.29.29.29",
+            # 其他国际DNS
+            "76.76.19.61", "76.76.2.22",  # ControlD
+            "94.140.14.14", "94.140.15.15",  # AdGuard
+            "185.228.168.9", "185.228.169.9",  # CleanBrowsing
+            "76.76.19.61", "76.76.2.22"  # ControlD备用
+        ]
+        
+        for dns_server in dns_servers:
+            # 检查缓存
+            cache_key = f"{dns_server}_{self.domain}"
+            if cache_key in self.dns_cache:
+                cached_ips = self.dns_cache[cache_key]
+                for ip in cached_ips:
+                    if self._is_valid_ip(ip):
+                        self.found_ips.add(ip)
+                        print(f"✓ {dns_server} (缓存): {ip}")
+                continue
+            
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = [dns_server]
+                resolver.timeout = 1  # 减少超时时间
+                resolver.lifetime = 1
+                
+                answers = resolver.resolve(self.domain, 'A')
+                found_ips = []
+                for answer in answers:
+                    ip = str(answer)
+                    if self._is_valid_ip(ip):
+                        self.found_ips.add(ip)
+                        found_ips.append(ip)
+                        print(f"✓ {dns_server}: {ip}")
+                
+                # 缓存结果
+                self.dns_cache[cache_key] = found_ips
+            except Exception:
+                continue
+    
+    def _resolve_http_dns(self):
+        """HTTP DNS查询（DoH服务）"""
+        http_services = [
+            # Google DoH
+            f"https://dns.google/resolve?name={self.domain}&type=A",
+            # Cloudflare DoH
+            f"https://cloudflare-dns.com/dns-query?name={self.domain}&type=A",
+            # OpenDNS DoH
+            f"https://doh.opendns.com/dns-query?name={self.domain}&type=A",
+            # Quad9 DoH
+            f"https://dns.quad9.net:5053/dns-query?name={self.domain}&type=A",
+            # AdGuard DoH
+            f"https://dns.adguard.com/dns-query?name={self.domain}&type=A",
+            # CleanBrowsing DoH
+            f"https://doh.cleanbrowsing.org/doh/security-filter/dns-query?name={self.domain}&type=A",
+            # ControlD DoH
+            f"https://doh.controld.com/dns-query?name={self.domain}&type=A",
+            # NextDNS DoH
+            f"https://dns.nextdns.io/dns-query?name={self.domain}&type=A",
+            # Mullvad DoH
+            f"https://doh.mullvad.net/dns-query?name={self.domain}&type=A",
+            # LibreDNS DoH
+            f"https://doh.libredns.gr/dns-query?name={self.domain}&type=A"
+        ]
+        
+        for service_url in http_services:
+            try:
+                response = requests.get(service_url, timeout=2)  # 减少超时时间
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'Answer' in data:
+                        for answer in data['Answer']:
+                            if answer.get('type') == 1:
+                                ip = answer.get('data', '').strip()
+                                if self._is_valid_ip(ip):
+                                    self.found_ips.add(ip)
+                                    service_name = service_url.split('//')[1].split('/')[0]
+                                    print(f"✓ {service_name}: {ip}")
+            except Exception:
+                continue
+    
+    def _resolve_command_line(self):
+        """命令行工具解析"""
+        # nslookup
+        try:
+            result = subprocess.run(['nslookup', self.domain], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if 'Address:' in line and not line.startswith('#'):
+                        ip = line.split('Address:')[-1].strip()
+                        if self._is_valid_ip(ip):
+                            self.found_ips.add(ip)
+                            print(f"✓ nslookup: {ip}")
+        except Exception:
+            pass
+    
+    def _resolve_powershell(self):
+        """PowerShell解析"""
+        if platform.system().lower() == "windows":
+            try:
+                ps_command = f"Resolve-DnsName -Name {self.domain} -Type A | Select-Object -ExpandProperty IPAddress"
+                result = subprocess.run(['powershell', '-Command', ps_command], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        ip = line.strip()
+                        if self._is_valid_ip(ip):
+                            self.found_ips.add(ip)
+                            print(f"✓ PowerShell: {ip}")
+            except Exception:
+                pass
+    
+    def _resolve_dig(self):
+        """dig命令解析"""
+        if platform.system().lower() != "windows":
+            try:
+                result = subprocess.run(['dig', '+short', self.domain], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        ip = line.strip()
+                        if self._is_valid_ip(ip):
+                            self.found_ips.add(ip)
+                            print(f"✓ dig: {ip}")
+            except Exception:
+                pass
+    
+    def _resolve_alternative_methods(self):
+        """其他解析方法"""
+        # 尝试使用不同的查询类型
+        try:
+            # AAAA记录（IPv6）
+            result = socket.getaddrinfo(self.domain, None, socket.AF_INET6)
+            for item in result:
+                ip = item[4][0]
+                if self._is_valid_ip(ip):
+                    self.found_ips.add(ip)
+                    print(f"✓ IPv6: {ip}")
+        except Exception:
+            pass
+    
+    def _resolve_international_dns(self):
+        """国际DNS服务器解析"""
+        international_dns = [
+            # 欧洲DNS
+            "84.200.69.80", "84.200.70.40",  # DNS.WATCH
+            "77.109.148.136", "77.109.148.137",  # Freenom World
+            "80.80.80.80", "80.80.81.81",  # Freenom World
+            "91.239.100.100", "89.233.43.71",  # UncensoredDNS
+            # 亚洲DNS
+            "202.12.27.33", "202.12.27.34",  # 日本DNS
+            "168.126.63.1", "168.126.63.2",  # 韩国DNS
+            "202.106.0.20", "202.106.46.151",  # 中国电信DNS
+            # 美洲DNS
+            "199.85.126.10", "199.85.127.10",  # Norton DNS
+            "198.101.242.72", "23.253.163.53",  # Alternate DNS
+            # 其他国际DNS
+            "45.90.28.0", "45.90.30.0",  # NextDNS
+            "185.228.168.9", "185.228.169.9",  # CleanBrowsing Family
+            "76.76.19.61", "76.76.2.22"  # ControlD
+        ]
+        
+        for dns_server in international_dns:
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = [dns_server]
+                resolver.timeout = 1  # 减少超时时间
+                resolver.lifetime = 1
+                
+                answers = resolver.resolve(self.domain, 'A')
+                for answer in answers:
+                    ip = str(answer)
+                    if self._is_valid_ip(ip):
+                        self.found_ips.add(ip)
+                        print(f"✓ 国际DNS {dns_server}: {ip}")
+            except Exception:
+                continue
+    
+    def _resolve_secure_dns(self):
+        """安全DNS服务器解析"""
+        secure_dns = [
+            # 加密DNS服务器
+            "9.9.9.9", "149.112.112.112",  # Quad9 (安全)
+            "1.1.1.1", "1.0.0.1",  # Cloudflare (安全)
+            "8.8.8.8", "8.8.4.4",  # Google (相对安全)
+            "208.67.222.222", "208.67.220.220",  # OpenDNS (安全)
+            # 隐私保护DNS
+            "94.140.14.14", "94.140.15.15",  # AdGuard (隐私)
+            "76.76.19.61", "76.76.2.22",  # ControlD (隐私)
+            "185.228.168.9", "185.228.169.9",  # CleanBrowsing (安全)
+            "76.76.19.61", "76.76.2.22"  # ControlD (隐私)
+        ]
+        
+        for dns_server in secure_dns:
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = [dns_server]
+                resolver.timeout = 1  # 减少超时时间
+                resolver.lifetime = 1
+                
+                answers = resolver.resolve(self.domain, 'A')
+                for answer in answers:
+                    ip = str(answer)
+                    if self._is_valid_ip(ip):
+                        self.found_ips.add(ip)
+                        print(f"✓ 安全DNS {dns_server}: {ip}")
+            except Exception:
+                continue
+    
+    def _is_valid_ip(self, ip: str) -> bool:
+        """检查是否为有效的IP地址"""
+        try:
+            socket.inet_aton(ip)
+            return True
+        except socket.error:
+            return False
+
+
 class NetworkQuality:
     """网络质量实时评估"""
     
@@ -72,8 +386,8 @@ class AdaptiveConcurrencyManager:
     """自适应并发管理器 - 根据网络状况动态调整并发数"""
     
     def __init__(self):
-        self.base_workers = 5
-        self.max_workers = 20
+        self.base_workers = 10  # 增加基础并发数
+        self.max_workers = 50   # 增加最大并发数
         self.network_quality = NetworkQuality()
         self.adaptive_mode = True
     
@@ -475,7 +789,7 @@ class MultiDimensionalHealthChecker:
             
             for key, future in futures.items():
                 try:
-                    health_results[key] = future.result(timeout=15)
+                    health_results[key] = future.result(timeout=5)  # 减少超时时间
                 except Exception as e:
                     health_results[key] = {'error': str(e)}
         
@@ -706,13 +1020,13 @@ class OptimizedTester:
             for ip, (ping_future, http_future) in futures.items():
                 try:
                     # 获取ping结果
-                    _, ping_latency, ping_success = ping_future.result(timeout=10)
+                    _, ping_latency, ping_success = ping_future.result(timeout=5)  # 减少超时时间
                     
                     # 更新网络质量指标
                     self.network_quality.update_metrics(ping_latency, ping_success)
                     
                     # 获取HTTP测试结果
-                    _, http_results = http_future.result(timeout=15)
+                    _, http_results = http_future.result(timeout=8)  # 减少超时时间
                     
                     # 如果启用多维度健康检测，进行综合健康检查
                     health_info = None
@@ -820,7 +1134,7 @@ class OptimizedTester:
         session = self.connection_manager.get_session(ip)
         
         # 只测试根路径，减少测试时间
-        test_paths = ["/"]
+        test_paths = ["/"]  # 快速模式只测试根路径
         
         # 测试HTTP
         if self.config.get("test_http", True):
@@ -1158,14 +1472,34 @@ class HostsOptimizer:
         default_config = {
             "domain": "ar-gcp-cdn.bistudio.com",  # 目标域名
             "test_ips": [],  # 将自动获取真实IP
-            "test_timeout": 5,
-            "test_count": 3,
+            "test_timeout": 3,  # 减少测试超时时间
+            "test_count": 2,    # 减少测试次数
             "backup_hosts": True,
+            "fast_mode": True,  # 启用快速模式
+            "enable_bandwidth_test": False,  # 禁用带宽测试以加快速度
+            "multi_dimensional_health": False,  # 禁用多维度健康检查以加快速度
             "dns_servers": [
-                "8.8.8.8",      # Google DNS
-                "1.1.1.1",      # Cloudflare DNS
-                "208.67.222.222", # OpenDNS
-                "114.114.114.114" # 114 DNS
+                "8.8.8.8",          # Google DNS
+                "8.8.4.4",          # Google DNS 备用
+                "1.1.1.1",          # Cloudflare DNS
+                "1.0.0.1",          # Cloudflare DNS 备用
+                "208.67.222.222",   # OpenDNS
+                "208.67.220.220",   # OpenDNS 备用
+                "114.114.114.114",  # 114 DNS
+                "114.114.115.115",  # 114 DNS 备用
+                "223.5.5.5",        # 阿里DNS
+                "223.6.6.6",        # 阿里DNS 备用
+                "180.76.76.76",     # 百度DNS
+                "119.29.29.29",     # 腾讯DNS
+                "182.254.116.116",  # 腾讯DNS 备用
+                "9.9.9.9",          # Quad9 DNS
+                "149.112.112.112",  # Quad9 DNS 备用
+                "76.76.19.61",      # ControlD DNS
+                "76.76.2.22",       # ControlD DNS 备用
+                "94.140.14.14",     # AdGuard DNS
+                "94.140.15.15",     # AdGuard DNS 备用
+                "76.76.19.61",      # ControlD DNS
+                "76.76.2.22"        # ControlD DNS 备用
             ],
             "test_http": True,
             "test_https": True,
@@ -1212,101 +1546,16 @@ class HostsOptimizer:
     
     def get_domain_ips(self) -> List[str]:
         """获取域名的所有 IP 地址"""
-        ips = set()
+        # 使用增强的DNS解析器
+        resolver = EnhancedDNSResolver(self.domain)
+        ip_list = resolver.resolve_all_ips()
         
-        print(f"正在获取 {self.domain} 的 IP 地址...")
-        
-        # 方法1: 使用系统 DNS 解析
-        try:
-            result = socket.getaddrinfo(self.domain, None)
-            for item in result:
-                ip = item[4][0]
-                if ip not in ips:
-                    ips.add(ip)
-                    print(f"✓ 系统DNS: {ip}")
-        except Exception as e:
-            print(f"⚠️ 系统DNS解析失败: {e}")
-        
-        # 方法2: 使用多个公共DNS服务器
-        for dns_server in self.config["dns_servers"]:
-            try:
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = [dns_server]
-                resolver.timeout = 3
-                resolver.lifetime = 3
-                
-                answers = resolver.resolve(self.domain, 'A')
-                for answer in answers:
-                    ip = str(answer)
-                    if ip not in ips:
-                        ips.add(ip)
-                        print(f"✓ {dns_server}: {ip}")
-            except Exception as e:
-                print(f"⚠️ DNS服务器 {dns_server} 解析失败: {e}")
-        
-        # 方法3: 使用 nslookup 命令
-        try:
-            # Windows 和 Unix 系统的 nslookup 输出格式略有不同
-            result = subprocess.run(['nslookup', self.domain], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    # 处理不同系统的 nslookup 输出格式
-                    if 'Address:' in line and not line.startswith('#'):
-                        ip = line.split('Address:')[-1].strip()
-                        if self._is_valid_ip(ip) and ip not in ips:
-                            ips.add(ip)
-                            print(f"✓ nslookup: {ip}")
-                    # 处理 Windows 系统的输出格式
-                    elif line and self._is_valid_ip(line) and line not in ips:
-                        ips.add(line)
-                        print(f"✓ nslookup: {line}")
-        except Exception as e:
-            print(f"⚠️ nslookup 失败: {e}")
-        
-        # 方法4: 使用 dig 命令 (如果可用，主要用于 Linux/macOS)
-        if platform.system().lower() != "windows":
-            try:
-                result = subprocess.run(['dig', '+short', self.domain], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    for line in result.stdout.strip().split('\n'):
-                        ip = line.strip()
-                        if self._is_valid_ip(ip) and ip not in ips:
-                            ips.add(ip)
-                            print(f"✓ dig: {ip}")
-            except Exception as e:
-                print(f"⚠️ dig 命令不可用: {e}")
-        else:
-            print("ℹ️ Windows 系统跳过 dig 命令（通常不可用）")
-        
-        # 方法5: 使用 PowerShell (Windows 特有)
-        if platform.system().lower() == "windows":
-            try:
-                ps_command = f"Resolve-DnsName -Name {self.domain} -Type A | Select-Object -ExpandProperty IPAddress"
-                result = subprocess.run(['powershell', '-Command', ps_command], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    for line in result.stdout.strip().split('\n'):
-                        ip = line.strip()
-                        if self._is_valid_ip(ip) and ip not in ips:
-                            ips.add(ip)
-                            print(f"✓ PowerShell: {ip}")
-            except Exception as e:
-                print(f"⚠️ PowerShell DNS 解析失败: {e}")
-        
-        ip_list = list(ips)
         if not ip_list:
             print("❌ 无法获取域名的 IP 地址")
             return []
         
-        print(f"\n找到 {len(ip_list)} 个 IP 地址:")
-        for i, ip in enumerate(ip_list, 1):
-            print(f"{i:2d}. {ip}")
-        
         return ip_list
+    
     
     def _is_valid_ip(self, ip: str) -> bool:
         """检查是否为有效的 IP 地址"""

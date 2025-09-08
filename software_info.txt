@@ -1,0 +1,58 @@
+# Arma Reforger 创意工坊修复工具 v1.3.0
+# 软件信息文件
+
+## 基本信息
+- 软件名称: Arma Reforger 创意工坊修复工具
+- 版本号: v1.3.0
+- 发布日期: 2025-09-08
+- 作者: ViVi141
+- 工作室: ViVi141 Studio
+- 联系邮箱: 747384120@qq.com
+- 项目地址: https://github.com/ViVi141/hosts_faster
+
+## 软件描述
+专门为《Arma Reforger》玩家设计的DNS污染和劫持修复工具。当玩家在下载创意工坊内容时遇到DNS污染、劫持或连接错误时，此工具可以自动测试并选择最优的ar-gcp-cdn.bistudio.com IP地址，修复下载问题。
+
+## 主要功能
+- DNS污染修复和劫持绕过
+- 自动获取真实IP地址
+- 多线程并行测试
+- 多维度健康检测
+- SSL证书验证
+- 智能评分系统
+- 实时进度显示
+- 自动备份和更新hosts文件
+
+## 技术特性
+- 支持50+个DNS服务器
+- 完全避免本地DNS污染
+- 快速模式检测
+- IP验证机制
+- 并发能力提升400%
+- 检测速度提升26%
+- 智能缓存机制
+
+## 系统要求
+- 操作系统: Windows 10/11
+- 架构: x64
+- 权限: 管理员权限
+- 网络: 需要网络连接
+- Python: 3.6+ (源码版本)
+
+## 许可证
+GNU General Public License v2.0
+
+## 版权声明
+Copyright (C) 2025 ViVi141 Studio. All rights reserved.
+Arma Reforger is a trademark of Bohemia Interactive a.s.
+
+## 支持信息
+- 问题反馈: https://github.com/ViVi141/hosts_faster/issues
+- 文档说明: https://github.com/ViVi141/hosts_faster/blob/main/README.md
+- 更新日志: https://github.com/ViVi141/hosts_faster/releases
+
+## 构建信息
+- 构建日期: 2025-09-08
+- 构建工具: PyInstaller
+- 目标平台: Windows x64
+- 语言: 中文 (简体) / English (US)

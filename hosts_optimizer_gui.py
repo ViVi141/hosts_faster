@@ -1063,7 +1063,7 @@ class HostsOptimizerGUI:
         """显示关于对话框"""
         about_text = """Arma Reforger 创意工坊修复工具
 
-版本: 1.2.0
+版本: 1.3.0
 目标域名: ar-gcp-cdn.bistudio.com
 
 功能特点:
