@@ -39,26 +39,29 @@ class EnhancedDNSResolver:
         self.verified_ips = set()  # 已验证的IP
         
     def resolve_all_ips(self) -> List[str]:
-        """使用所有可用的方法解析域名IP（避免本地DNS）"""
+        """使用真正的并行模式解析域名IP（避免本地DNS）"""
         print(f"正在全面解析 {self.domain} 的IP地址...")
         print("⚠️ 注意：为避免DNS污染，不使用本地DNS解析")
+        print("🚀 使用并行模式，所有DNS服务器同时查询...")
         
-        # 并行执行所有解析方法（移除系统DNS）
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = [
-                executor.submit(self._resolve_public_dns),
-                executor.submit(self._resolve_http_dns),
-                executor.submit(self._resolve_command_line),
-                executor.submit(self._resolve_powershell),
-                executor.submit(self._resolve_dig),
-                executor.submit(self._resolve_alternative_methods),
-                executor.submit(self._resolve_international_dns),
-                executor.submit(self._resolve_secure_dns)
-            ]
+        # 收集所有DNS服务器
+        all_dns_servers = self._collect_all_dns_servers()
+        print(f"📡 共收集到 {len(all_dns_servers)} 个权威DNS服务器")
+        
+        # 真正并行查询所有DNS服务器
+        with ThreadPoolExecutor(max_workers=min(50, len(all_dns_servers))) as executor:
+            futures = {
+                executor.submit(self._query_single_dns, dns_server): dns_server 
+                for dns_server in all_dns_servers
+            }
             
-            for future in as_completed(futures):
+            completed = 0
+            for future in as_completed(futures, timeout=10):
                 try:
-                    future.result(timeout=8)  # 减少超时时间
+                    future.result()
+                    completed += 1
+                    if completed % 10 == 0:  # 每完成10个显示进度
+                        print(f"📊 DNS查询进度: {completed}/{len(all_dns_servers)}")
                 except Exception:
                     continue
         
@@ -71,6 +74,98 @@ class EnhancedDNSResolver:
             print(f"{i:2d}. {ip}")
         
         return ip_list
+    
+    def _collect_all_dns_servers(self) -> List[str]:
+        """收集所有可用的DNS服务器"""
+        all_servers = []
+        
+        # 主要公共DNS服务器
+        all_servers.extend([
+            "8.8.8.8", "8.8.4.4",  # Google DNS
+            "1.1.1.1", "1.0.0.1",  # Cloudflare DNS
+            "208.67.222.222", "208.67.220.220",  # OpenDNS
+            "9.9.9.9", "149.112.112.112",  # Quad9 DNS
+        ])
+        
+        # 中国主要DNS服务器
+        all_servers.extend([
+            "114.114.114.114", "114.114.115.115",  # 114 DNS
+            "223.5.5.5", "223.6.6.6",  # 阿里DNS
+            "180.76.76.76",  # 百度DNS
+            "119.29.29.29", "182.254.116.116",  # 腾讯DNS
+            "117.50.10.10", "52.80.52.52",  # 腾讯DNS备用
+            "123.125.81.6", "123.125.81.7",  # 百度DNS备用
+        ])
+        
+        # 国际权威DNS服务器
+        all_servers.extend([
+            "76.76.19.61", "76.76.2.22",  # ControlD
+            "94.140.14.14", "94.140.15.15",  # AdGuard DNS
+            "185.228.168.9", "185.228.169.9",  # CleanBrowsing
+            "84.200.69.80", "84.200.70.40",  # DNS.WATCH
+            "8.26.56.26", "8.20.247.20",  # Comodo Secure DNS
+            "195.46.39.39", "195.46.39.40",  # SafeDNS
+            "77.88.8.8", "77.88.8.1",  # Yandex DNS
+            "45.90.28.0", "45.90.30.0",  # NextDNS
+            "9.9.9.10", "149.112.112.10",  # Quad9 (过滤)
+            "1.1.1.2", "1.0.0.2",  # Cloudflare (过滤)
+            "1.1.1.3", "1.0.0.3",  # Cloudflare (恶意软件过滤)
+        ])
+        
+        # CDN和云服务提供商DNS
+        all_servers.extend([
+            "199.85.126.10", "199.85.127.10",  # Norton ConnectSafe
+            "156.154.70.1", "156.154.71.1",  # Neustar DNS
+            "64.6.64.6", "64.6.65.6",  # Verisign DNS
+            "205.251.198.6", "205.251.198.7",  # AWS DNS
+            "205.251.199.6", "205.251.199.7",  # AWS DNS备用
+            "168.63.129.16",  # Azure DNS
+            "40.74.0.1", "40.74.0.2",  # Azure公共DNS
+        ])
+        
+        # 区域特定DNS服务器
+        all_servers.extend([
+            "168.126.63.1", "168.126.63.2",  # 韩国DNS
+            "202.106.0.20", "202.106.46.151",  # 中国电信DNS
+            "202.96.209.5", "202.96.209.133",  # 中国联通DNS
+        ])
+        
+        # 去重并返回
+        return list(set(all_servers))
+    
+    def _query_single_dns(self, dns_server: str):
+        """查询单个DNS服务器"""
+        # 检查缓存
+        cache_key = f"{dns_server}_{self.domain}"
+        if cache_key in self.dns_cache:
+            cached_ips = self.dns_cache[cache_key]
+            for ip in cached_ips:
+                if self._is_valid_ip(ip):
+                    self.found_ips.add(ip)
+                    print(f"✓ {dns_server} (缓存): {ip}")
+            return
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = [dns_server]
+            resolver.timeout = 0.5
+            resolver.lifetime = 0.5
+            
+            answers = resolver.resolve(self.domain, 'A')
+            found_ips = []
+            for answer in answers:
+                ip = str(answer)
+                if self._is_valid_ip(ip):
+                    self.found_ips.add(ip)
+                    found_ips.append(ip)
+                    print(f"✓ {dns_server}: {ip}")
+            
+            # 缓存结果
+            if found_ips:
+                self.dns_cache[cache_key] = found_ips
+                
+        except Exception:
+            pass  # 静默忽略失败的DNS查询
     
     def _verify_found_ips(self):
         """验证找到的IP地址是否真实有效（快速模式）"""
@@ -109,60 +204,8 @@ class EnhancedDNSResolver:
         self.found_ips = self.verified_ips
         print(f"验证完成，有效IP数量: {len(self.found_ips)}")
     
-    def _resolve_public_dns(self):
-        """公共DNS服务器解析"""
-        dns_servers = [
-            # Google DNS
-            "8.8.8.8", "8.8.4.4",
-            # Cloudflare DNS
-            "1.1.1.1", "1.0.0.1",
-            # OpenDNS
-            "208.67.222.222", "208.67.220.220",
-            # Quad9 DNS
-            "9.9.9.9", "149.112.112.112",
-            # 国内DNS
-            "114.114.114.114", "114.114.115.115",
-            "223.5.5.5", "223.6.6.6",
-            "180.76.76.76", "119.29.29.29",
-            # 其他国际DNS
-            "76.76.19.61", "76.76.2.22",  # ControlD
-            "94.140.14.14", "94.140.15.15",  # AdGuard
-            "185.228.168.9", "185.228.169.9",  # CleanBrowsing
-            "76.76.19.61", "76.76.2.22"  # ControlD备用
-        ]
-        
-        for dns_server in dns_servers:
-            # 检查缓存
-            cache_key = f"{dns_server}_{self.domain}"
-            if cache_key in self.dns_cache:
-                cached_ips = self.dns_cache[cache_key]
-                for ip in cached_ips:
-                    if self._is_valid_ip(ip):
-                        self.found_ips.add(ip)
-                        print(f"✓ {dns_server} (缓存): {ip}")
-                continue
-            
-            try:
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = [dns_server]
-                resolver.timeout = 1  # 减少超时时间
-                resolver.lifetime = 1
-                
-                answers = resolver.resolve(self.domain, 'A')
-                found_ips = []
-                for answer in answers:
-                    ip = str(answer)
-                    if self._is_valid_ip(ip):
-                        self.found_ips.add(ip)
-                        found_ips.append(ip)
-                        print(f"✓ {dns_server}: {ip}")
-                
-                # 缓存结果
-                self.dns_cache[cache_key] = found_ips
-            except Exception:
-                continue
     
-    def _resolve_http_dns(self):
+    def _is_valid_ip(self, ip: str) -> bool:
         """HTTP DNS查询（DoH服务）"""
         http_services = [
             # Google DoH
@@ -322,8 +365,8 @@ class EnhancedDNSResolver:
             try:
                 resolver = dns.resolver.Resolver()
                 resolver.nameservers = [dns_server]
-                resolver.timeout = 1  # 减少超时时间
-                resolver.lifetime = 1
+                resolver.timeout = 0.5  # 减少超时时间，提高速度
+                resolver.lifetime = 0.5
                 
                 answers = resolver.resolve(self.domain, 'A')
                 for answer in answers:
@@ -510,101 +553,6 @@ class MultiDimensionalHealthChecker:
         
         return results
     
-    def check_bandwidth(self, ip: str, domain: str) -> Dict:
-        """检查带宽（基于响应时间和数据量估算）"""
-        results = {
-            'bandwidth_mbps': 0.0,
-            'response_time': 0.0,
-            'data_size': 0,
-            'bandwidth_score': 0.0,
-            'test_method': 'response_based'
-        }
-        
-        try:
-            # 使用HEAD请求获取响应时间和内容长度
-            test_url = f"https://{ip}/"
-            headers = {'Host': domain}
-            
-            # 测试1: HEAD请求获取基本信息
-            start_time = time.time()
-            head_response = requests.head(
-                test_url,
-                headers=headers,
-                timeout=5,
-                verify=False,
-                allow_redirects=True
-            )
-            head_time = time.time() - start_time
-            
-            # 测试2: 小数据量GET请求
-            start_time = time.time()
-            get_response = requests.get(
-                test_url,
-                headers=headers,
-                timeout=8,
-                verify=False,
-                stream=True
-            )
-            
-            # 只读取前64KB数据
-            data_size = 0
-            max_size = 64 * 1024  # 64KB
-            for chunk in get_response.iter_content(chunk_size=8192):
-                data_size += len(chunk)
-                if data_size >= max_size:
-                    break
-            
-            get_time = time.time() - start_time
-            
-            # 基于响应时间和数据量估算带宽
-            if get_time > 0 and data_size > 0:
-                # 计算实际传输时间（减去连接建立时间）
-                actual_transfer_time = max(0.001, get_time - head_time)
-                bandwidth_mbps = (data_size * 8) / (actual_transfer_time * 1024 * 1024)
-                
-                results['bandwidth_mbps'] = bandwidth_mbps
-                results['response_time'] = get_time
-                results['data_size'] = data_size
-                
-                # 基于响应时间和数据量计算评分
-                # 考虑响应时间越短、数据量越大，评分越高
-                time_score = max(0, 1 - (get_time / 5))  # 5秒内完成得满分
-                size_score = min(1, data_size / (32 * 1024))  # 32KB以上得满分
-                results['bandwidth_score'] = (time_score + size_score) / 2
-                
-                # 如果带宽计算合理，使用带宽评分
-                if 0.1 <= bandwidth_mbps <= 100:  # 合理的带宽范围
-                    results['bandwidth_score'] = min(1.0, bandwidth_mbps / 5)  # 5Mbps为满分
-                    results['test_method'] = 'bandwidth_calculated'
-        
-        except Exception as e:
-            # 如果网络测试失败，使用连接延迟作为替代指标
-            try:
-                start_time = time.time()
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(3)
-                sock.connect((ip, 443))
-                sock.close()
-                connect_time = time.time() - start_time
-                
-                # 基于连接延迟估算网络质量
-                if connect_time < 0.1:
-                    results['bandwidth_score'] = 0.9
-                elif connect_time < 0.2:
-                    results['bandwidth_score'] = 0.7
-                elif connect_time < 0.5:
-                    results['bandwidth_score'] = 0.5
-                else:
-                    results['bandwidth_score'] = 0.3
-                
-                results['test_method'] = 'latency_based'
-                results['response_time'] = connect_time
-                
-            except Exception as e2:
-                results['error'] = f"网络测试失败: {str(e2)[:50]}"
-                results['bandwidth_score'] = 0.0
-        
-        return results
     
     def check_ssl_quality(self, ip: str, domain: str) -> Dict:
         """检查SSL证书质量"""
@@ -781,11 +729,6 @@ class MultiDimensionalHealthChecker:
             futures['protocol_support'] = executor.submit(self.check_protocol_support, ip, domain)
             futures['geographic'] = executor.submit(self.check_geographic_performance, ip)
             
-            # 根据配置决定是否进行带宽测试
-            if self.config.get("enable_bandwidth_test", True):
-                futures['bandwidth'] = executor.submit(self.check_bandwidth, ip, domain)
-            else:
-                futures['bandwidth'] = executor.submit(lambda: {'bandwidth_score': 0.5, 'test_method': 'disabled'})
             
             for key, future in futures.items():
                 try:
@@ -796,21 +739,17 @@ class MultiDimensionalHealthChecker:
         # 计算综合健康评分
         scores = []
         
-        # 稳定性评分 (30%)
+        # 稳定性评分 (40%)
         if 'stability_score' in health_results['stability']:
-            scores.append(health_results['stability']['stability_score'] * 0.3)
+            scores.append(health_results['stability']['stability_score'] * 0.4)
         
-        # 带宽评分 (20%)
-        if 'bandwidth_score' in health_results['bandwidth']:
-            scores.append(health_results['bandwidth']['bandwidth_score'] * 0.2)
-        
-        # SSL质量评分 (25%)
+        # SSL质量评分 (30%)
         if 'cert_score' in health_results['ssl_quality']:
-            scores.append(health_results['ssl_quality']['cert_score'] / 100 * 0.25)
+            scores.append(health_results['ssl_quality']['cert_score'] / 100 * 0.3)
         
-        # 协议支持评分 (15%)
+        # 协议支持评分 (20%)
         if 'protocol_score' in health_results['protocol_support']:
-            scores.append(health_results['protocol_support']['protocol_score'] / 100 * 0.15)
+            scores.append(health_results['protocol_support']['protocol_score'] / 100 * 0.2)
         
         # 地理位置评分 (10%)
         if 'geo_score' in health_results['geographic']:
@@ -1433,13 +1372,42 @@ class HostsOptimizer:
         self.domain = domain
         self.hosts_file = self._get_hosts_file_path()
         self.test_results = []
-        self.config_file = "hosts_config.json"
         self.test_urls = [
             f"http://{domain}/",
             f"https://{domain}/",
             f"http://{domain}/api/health",
             f"https://{domain}/api/health"
         ]
+        
+        # 硬编码配置 - 专为Arma Reforger优化
+        self.config = {
+            "backup_hosts": True,
+            "test_timeout": 5,
+            "test_count": 3,
+            "test_http": True,
+            "test_https": True,
+            "http_timeout": 8,
+            "verify_ssl": True,
+            "ssl_check_enabled": True,
+            "fallback_to_unverified_ssl": True,
+            "scoring_weights": {
+                "http_base": 50,
+                "https_base": 80,
+                "ping_base": 20,
+                "protocol_complete_bonus": 30
+            },
+            "multi_dimensional_health": True,
+            "health_test_iterations": 3,
+            "stability_threshold": 0.8,
+            "test_paths": ["/"],
+            "show_detailed_results": True,
+            "max_workers": 10,
+            "adaptive_concurrency": True,
+            "fast_mode": True,
+            "connection_pool_size": 20,
+            "retry_attempts": 2,
+            "network_quality_monitoring": True
+        }
         
         # 禁用 SSL 警告
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -1454,8 +1422,6 @@ class HostsOptimizer:
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-        
-        self.load_config()
     
     def _get_hosts_file_path(self) -> str:
         """获取系统 hosts 文件路径"""
@@ -1467,82 +1433,6 @@ class HostsOptimizer:
         else:  # Linux
             return "/etc/hosts"
     
-    def load_config(self):
-        """加载配置文件"""
-        default_config = {
-            "domain": "ar-gcp-cdn.bistudio.com",  # 目标域名
-            "test_ips": [],  # 将自动获取真实IP
-            "test_timeout": 3,  # 减少测试超时时间
-            "test_count": 2,    # 减少测试次数
-            "backup_hosts": True,
-            "fast_mode": True,  # 启用快速模式
-            "enable_bandwidth_test": False,  # 禁用带宽测试以加快速度
-            "multi_dimensional_health": False,  # 禁用多维度健康检查以加快速度
-            "dns_servers": [
-                "8.8.8.8",          # Google DNS
-                "8.8.4.4",          # Google DNS 备用
-                "1.1.1.1",          # Cloudflare DNS
-                "1.0.0.1",          # Cloudflare DNS 备用
-                "208.67.222.222",   # OpenDNS
-                "208.67.220.220",   # OpenDNS 备用
-                "114.114.114.114",  # 114 DNS
-                "114.114.115.115",  # 114 DNS 备用
-                "223.5.5.5",        # 阿里DNS
-                "223.6.6.6",        # 阿里DNS 备用
-                "180.76.76.76",     # 百度DNS
-                "119.29.29.29",     # 腾讯DNS
-                "182.254.116.116",  # 腾讯DNS 备用
-                "9.9.9.9",          # Quad9 DNS
-                "149.112.112.112",  # Quad9 DNS 备用
-                "76.76.19.61",      # ControlD DNS
-                "76.76.2.22",       # ControlD DNS 备用
-                "94.140.14.14",     # AdGuard DNS
-                "94.140.15.15",     # AdGuard DNS 备用
-                "76.76.19.61",      # ControlD DNS
-                "76.76.2.22"        # ControlD DNS 备用
-            ],
-            "test_http": True,
-            "test_https": True,
-            "http_timeout": 8,  # 减少默认超时时间
-            "verify_ssl": True,  # 默认启用SSL验证
-            "ssl_check_enabled": True,  # 启用SSL连接检查
-            "fallback_to_unverified_ssl": True,  # SSL验证失败时回退到不验证SSL
-            "scoring_weights": {  # 评分权重配置
-                "http_base": 50,      # HTTP基础分
-                "https_base": 80,     # HTTPS基础分
-                "ping_base": 20,      # Ping基础分
-                "protocol_complete_bonus": 30  # 协议完整性奖励
-            },
-            "multi_dimensional_health": True,  # 启用多维度健康检测
-            "health_test_iterations": 3,      # 健康检测测试次数
-            "stability_threshold": 0.8,       # 稳定性阈值
-            "enable_bandwidth_test": True,    # 启用带宽测试
-            "test_paths": [
-                "/"  # 只测试根路径，提高速度
-            ],
-            "show_detailed_results": True,
-            "max_workers": 10,
-            "adaptive_concurrency": True,  # 启用自适应并发
-            "fast_mode": True,  # 启用快速模式
-            "connection_pool_size": 20,  # 连接池大小
-            "retry_attempts": 2,  # 重试次数
-            "network_quality_monitoring": True  # 网络质量监控
-        }
-        
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    self.config = json.load(f)
-            except:
-                self.config = default_config
-        else:
-            self.config = default_config
-            self.save_config()
-    
-    def save_config(self):
-        """保存配置文件"""
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, indent=2, ensure_ascii=False)
     
     def get_domain_ips(self) -> List[str]:
         """获取域名的所有 IP 地址"""
@@ -2002,28 +1892,6 @@ class HostsOptimizer:
                         print(f"      平均延迟: {stability.get('avg_latency', 0):.1f}ms")
                         print(f"      延迟标准差: {stability.get('latency_std', 0):.1f}ms")
                     
-                    # 带宽信息
-                    if health_info.get('bandwidth'):
-                        bandwidth = health_info['bandwidth']
-                        test_method = bandwidth.get('test_method', 'unknown')
-                        if test_method == 'bandwidth_calculated':
-                            print(f"      带宽测试: {bandwidth.get('bandwidth_mbps', 0):.2f} Mbps")
-                            print(f"      响应时间: {bandwidth.get('response_time', 0):.2f}s")
-                            print(f"      数据大小: {bandwidth.get('data_size', 0)} bytes")
-                        elif test_method == 'response_based':
-                            print(f"      响应测试: {bandwidth.get('response_time', 0):.2f}s")
-                            print(f"      数据大小: {bandwidth.get('data_size', 0)} bytes")
-                            print(f"      测试方法: 响应时间评估")
-                        elif test_method == 'latency_based':
-                            print(f"      连接延迟: {bandwidth.get('response_time', 0):.3f}s")
-                            print(f"      测试方法: 连接延迟评估")
-                        elif test_method == 'disabled':
-                            print(f"      带宽测试: 已禁用")
-                            print(f"      网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f} (默认)")
-                        else:
-                            print(f"      网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f}")
-                            if bandwidth.get('error'):
-                                print(f"      错误: {bandwidth.get('error')}")
                     
                     # SSL质量信息
                     if health_info.get('ssl_quality'):

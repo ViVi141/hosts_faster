@@ -15,6 +15,12 @@ import sys
 from typing import List, Dict
 import json
 from hosts_optimizer import HostsOptimizer
+try:
+    from hosts_optimizer_true_parallel import TrueParallelOptimizerAdapter
+    TRUE_PARALLEL_AVAILABLE = True
+except ImportError:
+    TRUE_PARALLEL_AVAILABLE = False
+    print("警告: 并行模块不可用，请安装 aiohttp: pip install aiohttp")
 
 # 检查管理员权限
 try:
@@ -86,7 +92,7 @@ class HostsOptimizerGUI:
         # 按钮
         self.start_button = ttk.Button(
             self.control_frame, 
-            text="开始测试", 
+            text="🚀 开始测试", 
             command=self.start_test,
             style="Accent.TButton"
         )
@@ -130,13 +136,6 @@ class HostsOptimizerGUI:
         self.stats_frame = ttk.Frame(self.results_frame)
         self.stats_label = ttk.Label(self.stats_frame, text="", font=("Arial", 9))
         
-        # 带宽测试说明
-        self.bandwidth_note = ttk.Label(
-            self.stats_frame,
-            text="注：带宽测试仅用于网络质量评估，不代表实际下载速度",
-            font=("Arial", 8),
-            foreground="gray"
-        )
         
         # 快速预览按钮
         self.preview_button = ttk.Button(
@@ -149,7 +148,7 @@ class HostsOptimizerGUI:
         # 结果树形视图
         self.results_tree = ttk.Treeview(
             self.results_frame,
-            columns=("ip", "ping", "http", "https", "ssl", "bandwidth", "stability", "health", "score"),
+            columns=("ip", "ping", "http", "https", "ssl", "stability", "health", "score"),
             show="headings",
             height=8
         )
@@ -160,7 +159,6 @@ class HostsOptimizerGUI:
         self.results_tree.heading("http", text="HTTP 延迟")
         self.results_tree.heading("https", text="HTTPS 延迟")
         self.results_tree.heading("ssl", text="SSL 状态")
-        self.results_tree.heading("bandwidth", text="带宽")
         self.results_tree.heading("stability", text="稳定性")
         self.results_tree.heading("health", text="健康等级")
         self.results_tree.heading("score", text="综合评分")
@@ -171,7 +169,6 @@ class HostsOptimizerGUI:
         self.results_tree.column("http", width=80)
         self.results_tree.column("https", width=80)
         self.results_tree.column("ssl", width=80)
-        self.results_tree.column("bandwidth", width=80)
         self.results_tree.column("stability", width=80)
         self.results_tree.column("health", width=80)
         self.results_tree.column("score", width=100)
@@ -260,7 +257,6 @@ class HostsOptimizerGUI:
         self.results_frame.grid(row=4, column=0, columnspan=2, pady=(0, 10), sticky=(tk.W, tk.E, tk.N, tk.S))
         self.stats_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         self.stats_label.grid(row=0, column=0, sticky=tk.W)
-        self.bandwidth_note.grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
         self.preview_button.grid(row=0, column=1, padx=(10, 0))
         self.results_tree.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.results_scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
@@ -416,7 +412,14 @@ class HostsOptimizerGUI:
         self.root.after(100, self.update_log)
     
     def start_test(self):
-        """开始测试"""
+        """开始测试 - 使用真正并行处理"""
+        if not TRUE_PARALLEL_AVAILABLE:
+            messagebox.showerror("功能不可用", 
+                "真正并行测试功能需要安装 aiohttp 库。\n\n"
+                "请运行以下命令安装：\n"
+                "pip install aiohttp")
+            return
+            
         if self.is_running:
             return
         
@@ -439,17 +442,19 @@ class HostsOptimizerGUI:
         
         # 初始化进度
         self.progress_bar['value'] = 0
-        self.progress_label.config(text="正在测试...")
+        self.progress_label.config(text="🚀 并行测试中...")
         self.start_time = time.time()  # 记录开始时间
-        self.update_progress("初始化", 0, 0, "准备测试环境")
+        self.update_progress("初始化", 0, 0, "准备并行测试环境")
         
         # 记录开始测试的详细日志
-        self.log_detailed("开始测试流程", "INFO", "TEST_START")
+        self.log_message("🚀 启动并行测试模式", "INFO")
+        self.log_detailed("使用异步IO和协程实现并行处理", "INFO", "PARALLEL_TEST")
         self.log_detailed("清空历史数据和日志", "DEBUG", "CLEANUP")
         
-        # 在新线程中运行测试
-        self.test_thread = threading.Thread(target=self.run_test, daemon=True)
+        # 在新线程中运行并行测试
+        self.test_thread = threading.Thread(target=self.run_true_parallel_test, daemon=True)
         self.test_thread.start()
+    
     
     def stop_test(self):
         """停止测试"""
@@ -536,6 +541,125 @@ class HostsOptimizerGUI:
             self.progress_bar['value'] = 0
             self.progress_label.config(text="测试失败")
             self.update_progress("失败", 0, 0, f"错误: {str(e)[:50]}")
+    
+    def run_true_parallel_test(self):
+        """运行并行测试（在后台线程中）"""
+        try:
+            self.log_message("🚀 开始并行测试", "INFO")
+            self.log_detailed("使用异步IO和协程实现并行处理", "INFO", "PARALLEL_INIT")
+            self.log_message("目标域名: ar-gcp-cdn.bistudio.com", "INFO")
+            
+            # 创建HostsOptimizer实例用于DNS解析
+            self.update_progress("初始化", 0, 0, "创建优化器实例")
+            self.log_detailed("创建 HostsOptimizer 实例", "DEBUG", "PARALLEL_INIT")
+            self.optimizer = HostsOptimizer("ar-gcp-cdn.bistudio.com")
+            
+            # 更新配置以支持并行处理
+            self.optimizer.config.update({
+                "max_concurrent_requests": 50,  # 降低并发数
+                "max_per_host": 20,             # 降低每主机连接数
+                "http_timeout": 15,             # 增加HTTP超时时间
+                "connect_timeout": 8,           # 增加连接超时时间
+                "read_timeout": 10,             # 增加读取超时时间
+                "ping_timeout": 5,              # 增加ping超时时间
+                "ssl_check_enabled": True,
+                "multi_dimensional_health": True
+            })
+            
+            # 创建并行优化器适配器
+            self.update_progress("初始化", 0, 0, "创建并行优化器实例")
+            self.log_detailed("创建 TrueParallelOptimizerAdapter 实例", "DEBUG", "PARALLEL_INIT")
+            parallel_adapter = TrueParallelOptimizerAdapter(self.optimizer.config)
+            
+            # 获取域名IP地址
+            self.update_progress("DNS解析", 0, 0, "获取域名IP地址")
+            self.log_detailed("开始DNS解析", "INFO", "DNS_RESOLVE")
+            
+            domain_ips = self.optimizer.get_domain_ips()
+            
+            if not domain_ips:
+                self.log_message("❌ 没有找到可用的 IP 地址", "ERROR")
+                self.log_detailed("DNS解析失败，未找到任何IP地址", "ERROR", "DNS_RESOLVE")
+                self.update_progress("失败", 0, 0, "DNS解析失败")
+                return
+            
+            self.log_message(f"✅ 找到 {len(domain_ips)} 个IP地址", "SUCCESS")
+            self.log_detailed(f"IP地址列表: {', '.join(domain_ips[:10])}{'...' if len(domain_ips) > 10 else ''}", "DEBUG", "DNS_RESOLVE")
+            
+            # 并行测试 IP 地址
+            self.update_progress("IP测试", 0, len(domain_ips), "开始并行测试")
+            self.log_detailed("开始并行测试 IP 地址", "INFO", "PARALLEL_TEST")
+            self.log_detailed(f"使用 {self.optimizer.config.get('max_concurrent_requests', 100)} 个并发请求进行测试", "DEBUG", "PARALLEL_TEST")
+            
+            # 使用并行测试器
+            results = parallel_adapter.test_ips_with_true_parallel(
+                domain_ips, 
+                "ar-gcp-cdn.bistudio.com", 
+                progress_callback=self.true_parallel_progress_callback
+            )
+            
+            # 更新进度显示
+            self.update_progress("结果处理", 0, 0, "处理测试结果")
+            
+            if not results:
+                self.log_message("❌ 没有找到可用的 IP 地址", "ERROR")
+                self.log_detailed("所有 IP 地址测试均失败", "ERROR", "PARALLEL_TEST")
+                self.update_progress("失败", 0, 0, "所有IP测试失败")
+                return
+            
+            # 分析结果
+            available_count = len([r for r in results if r['http_available'] or r['https_available']])
+            self.log_message(f"✅ 测试完成！找到 {available_count}/{len(results)} 个可用IP", "SUCCESS")
+            self.log_detailed(f"可用IP数量: {available_count}, 总测试IP数量: {len(results)}", "INFO", "PARALLEL_RESULT")
+            
+            # 显示最佳结果
+            if results:
+                best_result = results[0]
+                self.log_message(f"🏆 最佳IP: {best_result['ip']} (评分: {best_result['overall_score']:.1f})", "SUCCESS")
+                self.log_detailed(f"最佳IP详细信息: {best_result['ip']}, 评分: {best_result['overall_score']:.1f}, Ping: {best_result['ping_latency']:.3f}s", "INFO", "BEST_RESULT")
+            
+            # 保存结果
+            self.test_results = results
+            
+            # 更新GUI显示
+            self.root.after(0, self.update_results_display)
+            
+            # 完成测试 - 直接在主线程中处理
+            self.is_running = False
+            self.start_button.config(state="normal")
+            self.stop_button.config(state="disabled")
+            self.update_hosts_button.config(state="normal")
+            self.progress_bar['value'] = 100
+            self.progress_label.config(text="测试完成")
+            self.update_progress("完成", len(results), len(results), f"找到 {available_count} 个可用IP")
+            
+            self.log_message("🚀 并行测试完成", "INFO")
+            self.log_detailed("并行测试流程完全结束", "INFO", "PARALLEL_TEST_END")
+            
+        except Exception as e:
+            self.log_message(f"❌ 并行测试失败: {str(e)}", "ERROR")
+            self.log_detailed(f"并行测试异常: {str(e)}", "ERROR", "PARALLEL_ERROR")
+            self.is_running = False
+            self.start_button.config(state="normal")
+            self.stop_button.config(state="disabled")
+            self.progress_bar['value'] = 0
+            self.progress_label.config(text="测试失败")
+            self.update_progress("失败", 0, 0, f"错误: {str(e)[:50]}")
+    
+    def true_parallel_progress_callback(self, completed: int, total: int, current_ip: str):
+        """并行测试进度回调"""
+        def update_progress():
+            if self.is_running:
+                progress = (completed / total) * 100
+                self.progress_bar['value'] = progress
+                self.progress_label.config(text=f"🚀 并行测试中... {completed}/{total} ({progress:.1f}%)")
+                self.update_progress("IP测试", completed, total, f"正在测试: {current_ip}")
+                
+                # 实时日志
+                self.log_detailed(f"完成测试: {current_ip} ({completed}/{total})", "DEBUG", "PARALLEL_PROGRESS")
+        
+        # 在主线程中更新GUI
+        self.root.after(0, update_progress)
     
     def test_ips_with_progress(self, ips):
         """带进度跟踪的IP测试"""
@@ -625,22 +749,6 @@ class HostsOptimizerGUI:
             # HTTP/2支持已取消检测
             # 不再显示HTTP/2相关信息
             
-            # 带宽显示
-            bandwidth_text = "N/A"
-            if result.get('health_info') and result['health_info'].get('bandwidth'):
-                bandwidth_info = result['health_info']['bandwidth']
-                if bandwidth_info.get('bandwidth_mbps', 0) > 0:
-                    bandwidth = bandwidth_info['bandwidth_mbps']
-                    if bandwidth >= 10:
-                        bandwidth_text = f"{bandwidth:.1f}M"
-                    elif bandwidth >= 1:
-                        bandwidth_text = f"{bandwidth:.2f}M"
-                    else:
-                        bandwidth_text = f"{bandwidth*1000:.0f}K"
-                else:
-                    bandwidth_text = "未测试"
-            else:
-                bandwidth_text = "未测试"
             
             # 稳定性显示
             stability_text = "N/A"
@@ -681,14 +789,13 @@ class HostsOptimizerGUI:
             else:
                 score_text = f"× {score:.1f}"
             
-            # 插入行（按新的列顺序）
+            # 插入行（移除带宽列）
             item = self.results_tree.insert("", "end", values=(
                 result['ip'],           # IP 地址
                 ping_text,             # Ping 延迟
                 http_text,             # HTTP 延迟
                 https_text,            # HTTPS 延迟
                 ssl_text,              # SSL 状态
-                bandwidth_text,        # 带宽
                 stability_text,        # 稳定性
                 health_text,           # 健康等级
                 score_text             # 综合评分（最后一列）
@@ -817,31 +924,6 @@ class HostsOptimizerGUI:
                 details += f"  平均延迟: {stability.get('avg_latency', 0):.1f}ms\n"
                 details += f"  延迟标准差: {stability.get('latency_std', 0):.1f}ms\n\n"
             
-            # 带宽信息
-            if health_info.get('bandwidth'):
-                bandwidth = health_info['bandwidth']
-                test_method = bandwidth.get('test_method', 'unknown')
-                details += "网络质量:\n"
-                details += "  ⚠️ 注意：带宽测试仅用于网络质量评估，不代表实际下载速度\n"
-                if test_method == 'bandwidth_calculated':
-                    details += f"  带宽测试: {bandwidth.get('bandwidth_mbps', 0):.2f} Mbps\n"
-                    details += f"  响应时间: {bandwidth.get('response_time', 0):.2f}s\n"
-                    details += f"  数据大小: {bandwidth.get('data_size', 0)} bytes\n"
-                elif test_method == 'response_based':
-                    details += f"  响应测试: {bandwidth.get('response_time', 0):.2f}s\n"
-                    details += f"  数据大小: {bandwidth.get('data_size', 0)} bytes\n"
-                    details += f"  测试方法: 响应时间评估\n"
-                elif test_method == 'latency_based':
-                    details += f"  连接延迟: {bandwidth.get('response_time', 0):.3f}s\n"
-                    details += f"  测试方法: 连接延迟评估\n"
-                elif test_method == 'disabled':
-                    details += f"  带宽测试: 已禁用\n"
-                    details += f"  网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f} (默认)\n"
-                else:
-                    details += f"  网络质量评分: {bandwidth.get('bandwidth_score', 0):.2f}\n"
-                    if bandwidth.get('error'):
-                        details += f"  错误: {bandwidth.get('error')}\n"
-                details += "\n"
             
             # SSL质量信息
             if health_info.get('ssl_quality'):
@@ -977,6 +1059,13 @@ class HostsOptimizerGUI:
     
     def show_config(self):
         """显示配置窗口"""
+        # 如果optimizer还没有初始化，先创建一个临时实例来获取默认配置
+        if self.optimizer is None:
+            temp_optimizer = HostsOptimizer("ar-gcp-cdn.bistudio.com")
+            config = temp_optimizer.config
+        else:
+            config = self.optimizer.config
+            
         config_window = tk.Toplevel(self.root)
         config_window.title("配置")
         config_window.geometry("500x400")
@@ -988,46 +1077,43 @@ class HostsOptimizerGUI:
         
         # 配置项
         ttk.Label(config_frame, text="测试超时时间 (秒):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        timeout_var = tk.StringVar(value=str(self.optimizer.config.get("test_timeout", 5)))
+        timeout_var = tk.StringVar(value=str(config.get("test_timeout", 5)))
         ttk.Entry(config_frame, textvariable=timeout_var, width=10).grid(row=0, column=1, sticky=tk.W, pady=5)
         
         ttk.Label(config_frame, text="HTTP 超时时间 (秒):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        http_timeout_var = tk.StringVar(value=str(self.optimizer.config.get("http_timeout", 10)))
+        http_timeout_var = tk.StringVar(value=str(config.get("http_timeout", 10)))
         ttk.Entry(config_frame, textvariable=http_timeout_var, width=10).grid(row=1, column=1, sticky=tk.W, pady=5)
         
         ttk.Label(config_frame, text="最大工作线程数:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        max_workers_var = tk.StringVar(value=str(self.optimizer.config.get("max_workers", 10)))
+        max_workers_var = tk.StringVar(value=str(config.get("max_workers", 10)))
         ttk.Entry(config_frame, textvariable=max_workers_var, width=10).grid(row=2, column=1, sticky=tk.W, pady=5)
         
         # 复选框
-        test_http_var = tk.BooleanVar(value=self.optimizer.config.get("test_http", True))
+        test_http_var = tk.BooleanVar(value=config.get("test_http", True))
         ttk.Checkbutton(config_frame, text="测试 HTTP", variable=test_http_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=5)
         
-        test_https_var = tk.BooleanVar(value=self.optimizer.config.get("test_https", True))
+        test_https_var = tk.BooleanVar(value=config.get("test_https", True))
         ttk.Checkbutton(config_frame, text="测试 HTTPS", variable=test_https_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=5)
         
-        show_details_var = tk.BooleanVar(value=self.optimizer.config.get("show_detailed_results", True))
+        show_details_var = tk.BooleanVar(value=config.get("show_detailed_results", True))
         ttk.Checkbutton(config_frame, text="显示详细结果", variable=show_details_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=5)
         
-        backup_hosts_var = tk.BooleanVar(value=self.optimizer.config.get("backup_hosts", True))
+        backup_hosts_var = tk.BooleanVar(value=config.get("backup_hosts", True))
         ttk.Checkbutton(config_frame, text="自动备份 hosts 文件", variable=backup_hosts_var).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=5)
         
         # 多维度健康检测配置
         ttk.Separator(config_frame, orient='horizontal').grid(row=7, column=0, columnspan=2, sticky='ew', pady=10)
         ttk.Label(config_frame, text="多维度健康检测配置", font=("Arial", 10, "bold")).grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=5)
         
-        multi_health_var = tk.BooleanVar(value=self.optimizer.config.get("multi_dimensional_health", True))
+        multi_health_var = tk.BooleanVar(value=config.get("multi_dimensional_health", True))
         ttk.Checkbutton(config_frame, text="启用多维度健康检测", variable=multi_health_var).grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=5)
         
-        enable_bandwidth_var = tk.BooleanVar(value=self.optimizer.config.get("enable_bandwidth_test", True))
-        ttk.Checkbutton(config_frame, text="启用带宽测试", variable=enable_bandwidth_var).grid(row=10, column=0, columnspan=2, sticky=tk.W, pady=5)
-        
         ttk.Label(config_frame, text="健康检测测试次数:").grid(row=11, column=0, sticky=tk.W, pady=5)
-        health_iterations_var = tk.StringVar(value=str(self.optimizer.config.get("health_test_iterations", 3)))
+        health_iterations_var = tk.StringVar(value=str(config.get("health_test_iterations", 3)))
         ttk.Entry(config_frame, textvariable=health_iterations_var, width=10).grid(row=11, column=1, sticky=tk.W, pady=5)
         
         ttk.Label(config_frame, text="稳定性阈值:").grid(row=12, column=0, sticky=tk.W, pady=5)
-        stability_threshold_var = tk.StringVar(value=str(self.optimizer.config.get("stability_threshold", 0.8)))
+        stability_threshold_var = tk.StringVar(value=str(config.get("stability_threshold", 0.8)))
         ttk.Entry(config_frame, textvariable=stability_threshold_var, width=10).grid(row=12, column=1, sticky=tk.W, pady=5)
         
         # 按钮
@@ -1036,6 +1122,10 @@ class HostsOptimizerGUI:
         
         def save_config():
             try:
+                # 如果optimizer还没有初始化，先创建一个实例
+                if self.optimizer is None:
+                    self.optimizer = HostsOptimizer("ar-gcp-cdn.bistudio.com")
+                
                 self.optimizer.config["test_timeout"] = int(timeout_var.get())
                 self.optimizer.config["http_timeout"] = int(http_timeout_var.get())
                 self.optimizer.config["max_workers"] = int(max_workers_var.get())
@@ -1046,7 +1136,6 @@ class HostsOptimizerGUI:
                 
                 # 多维度健康检测配置
                 self.optimizer.config["multi_dimensional_health"] = multi_health_var.get()
-                self.optimizer.config["enable_bandwidth_test"] = enable_bandwidth_var.get()
                 self.optimizer.config["health_test_iterations"] = int(health_iterations_var.get())
                 self.optimizer.config["stability_threshold"] = float(stability_threshold_var.get())
                 
@@ -1063,7 +1152,7 @@ class HostsOptimizerGUI:
         """显示关于对话框"""
         about_text = """Arma Reforger 创意工坊修复工具
 
-版本: 1.3.0
+版本: 2.0.0
 目标域名: ar-gcp-cdn.bistudio.com
 
 功能特点:
@@ -1073,7 +1162,6 @@ class HostsOptimizerGUI:
 • HTTP/HTTPS 状态码检测
 • 多维度健康检测系统
 • 连接稳定性检测
-• 带宽和网络质量测试
 • SSL证书质量评估
 • 协议支持检测
 • 地理位置性能分析
