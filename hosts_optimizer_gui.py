@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Hosts 选优工具 GUI 版本
-用于测试 ar-gcp-cdn.bistudio.com 的不同 IP 地址延迟，并选择最优的 IP 更新到 hosts 文件
+"""Hosts optimization tool GUI version.
+
+This module provides a graphical user interface for testing different IP addresses
+of ar-gcp-cdn.bistudio.com and selecting the optimal IP to update the hosts file.
 """
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
-import threading
-import queue
-import time
-import os
-import sys
-from typing import List, Dict
 import json
+import os
+import queue
+import sys
+import threading
+import time
+from typing import Dict, List, Optional
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
 from hosts_optimizer import HostsOptimizer
+
 try:
     from hosts_optimizer_true_parallel import TrueParallelOptimizerAdapter
     TRUE_PARALLEL_AVAILABLE = True
@@ -22,7 +26,7 @@ except ImportError:
     TRUE_PARALLEL_AVAILABLE = False
     print("警告: 并行模块不可用，请安装 aiohttp: pip install aiohttp")
 
-# 检查管理员权限
+# Check administrator privileges
 try:
     from admin_check import check_admin_privileges
     check_admin_privileges()
@@ -32,112 +36,116 @@ except ImportError:
 
 
 class HostsOptimizerGUI:
-    """Hosts 选优工具 GUI 界面"""
+    """Hosts optimization tool GUI interface.
     
-    def __init__(self):
+    This class provides a graphical user interface for the hosts optimization tool,
+    allowing users to test different IP addresses and update their hosts file.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize the GUI application."""
         self.root = tk.Tk()
         self.root.title("Arma Reforger 创意工坊修复工具 - ar-gcp-cdn.bistudio.com")
         self.root.geometry("1000x700")
         self.root.minsize(800, 600)
         
-        # 设置图标（如果有的话）
+        # Set icon if available
         try:
             self.root.iconbitmap("favicon.ico")
-        except:
+        except (tk.TclError, OSError):
             pass
         
-        # 初始化变量
-        self.optimizer = None
-        self.is_running = False
-        self.test_results = []
-        self.log_queue = queue.Queue()
+        # Initialize variables
+        self.optimizer: Optional[HostsOptimizer] = None
+        self.is_running: bool = False
+        self.test_results: List[Dict] = []
+        self.log_queue: queue.Queue = queue.Queue()
         
-        # 进度跟踪
-        self.total_ips = 0
-        self.tested_ips = 0
-        self.current_phase = ""
-        self.start_time = None
-        self.estimated_time = 0
+        # Progress tracking
+        self.total_ips: int = 0
+        self.tested_ips: int = 0
+        self.current_phase: str = ""
+        self.start_time: Optional[float] = None
+        self.estimated_time: float = 0.0
         
-        # 创建界面
-        self.create_widgets()
-        self.setup_layout()
+        # Create interface
+        self._create_widgets()
+        self._setup_layout()
         
-        # 启动日志更新
-        self.update_log()
+        # Start log updates
+        self._update_log()
         
-        # 绑定关闭事件
+        # Bind close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
-    def create_widgets(self):
-        """创建界面组件"""
-        # 主框架
+    def _create_widgets(self) -> None:
+        """Create GUI components."""
+        # Main frame
         self.main_frame = ttk.Frame(self.root, padding="10")
         
-        # 标题
+        # Title labels
         self.title_label = ttk.Label(
-            self.main_frame, 
-            text="Arma Reforger 创意工坊修复工具", 
+            self.main_frame,
+            text="Arma Reforger 创意工坊修复工具",
             font=("Arial", 16, "bold")
         )
         self.domain_label = ttk.Label(
-            self.main_frame, 
-            text="目标域名: ar-gcp-cdn.bistudio.com", 
+            self.main_frame,
+            text="目标域名: ar-gcp-cdn.bistudio.com",
             font=("Arial", 12)
         )
         
-        # 控制按钮框架
+        # Control buttons frame
         self.control_frame = ttk.Frame(self.main_frame)
         
-        # 按钮
+        # Buttons
         self.start_button = ttk.Button(
-            self.control_frame, 
-            text="🚀 开始测试", 
+            self.control_frame,
+            text="🚀 开始测试",
             command=self.start_test,
             style="Accent.TButton"
         )
         self.stop_button = ttk.Button(
-            self.control_frame, 
-            text="停止测试", 
+            self.control_frame,
+            text="停止测试",
             command=self.stop_test,
             state="disabled"
         )
         self.update_hosts_button = ttk.Button(
-            self.control_frame, 
-            text="更新 Hosts", 
+            self.control_frame,
+            text="更新 Hosts",
             command=self.update_hosts,
             state="disabled"
         )
         self.config_button = ttk.Button(
-            self.control_frame, 
-            text="配置", 
+            self.control_frame,
+            text="配置",
             command=self.show_config
         )
         self.about_button = ttk.Button(
-            self.control_frame, 
-            text="关于", 
+            self.control_frame,
+            text="关于",
             command=self.show_about
         )
         
-        # 进度条
+        # Progress bar
         self.progress_frame = ttk.Frame(self.main_frame)
         self.progress_label = ttk.Label(self.progress_frame, text="就绪")
         self.progress_bar = ttk.Progressbar(
-            self.progress_frame, 
+            self.progress_frame,
             mode='determinate',
             length=400
         )
         self.progress_text = ttk.Label(self.progress_frame, text="", font=("Arial", 9))
         
-        # 结果框架
+        # Results frame
         self.results_frame = ttk.LabelFrame(self.main_frame, text="测试结果", padding="5")
         
-        # 结果统计信息
+        # Results statistics
         self.stats_frame = ttk.Frame(self.results_frame)
         self.stats_label = ttk.Label(self.stats_frame, text="", font=("Arial", 9))
         
-        
-        # 快速预览按钮
+        # Quick preview button
         self.preview_button = ttk.Button(
             self.stats_frame,
             text="快速预览",
@@ -194,7 +202,7 @@ class HostsOptimizerGUI:
         ttk.Radiobutton(self.log_type_frame, text="详细日志", variable=self.log_type_var, 
                        value="detailed", command=self.switch_log_type).grid(row=0, column=1, padx=(0, 10))
         
-        # 日志控制按钮
+        # Log control buttons
         ttk.Button(self.log_type_frame, text="保存日志", command=self.save_log).grid(row=0, column=2, padx=(5, 0))
         ttk.Button(self.log_type_frame, text="清空日志", command=self.clear_log).grid(row=0, column=3, padx=(5, 0))
         
@@ -227,19 +235,19 @@ class HostsOptimizerGUI:
             font=("Arial", 12, "bold")
         )
         
-        # 绑定事件
+        # Bind events
         self.results_tree.bind("<Double-1>", self.on_result_double_click)
     
-    def setup_layout(self):
-        """设置布局"""
-        # 主框架
+    def _setup_layout(self) -> None:
+        """Setup the GUI layout."""
+        # Main frame
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # 标题
+        # Title labels
         self.title_label.grid(row=0, column=0, columnspan=2, pady=(0, 5))
         self.domain_label.grid(row=1, column=0, columnspan=2, pady=(0, 10))
         
-        # 控制按钮
+        # Control buttons
         self.control_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
         self.start_button.grid(row=0, column=0, padx=(0, 5))
         self.stop_button.grid(row=0, column=1, padx=(0, 5))
@@ -247,13 +255,13 @@ class HostsOptimizerGUI:
         self.config_button.grid(row=0, column=3, padx=(0, 5))
         self.about_button.grid(row=0, column=4)
         
-        # 进度条
+        # Progress bar
         self.progress_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10), sticky=(tk.W, tk.E))
         self.progress_label.grid(row=0, column=0, sticky=tk.W)
         self.progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
         self.progress_text.grid(row=2, column=0, sticky=tk.W, pady=(2, 0))
         
-        # 结果框架
+        # Results frame
         self.results_frame.grid(row=4, column=0, columnspan=2, pady=(0, 10), sticky=(tk.W, tk.E, tk.N, tk.S))
         self.stats_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         self.stats_label.grid(row=0, column=0, sticky=tk.W)
@@ -261,16 +269,16 @@ class HostsOptimizerGUI:
         self.results_tree.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.results_scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
         
-        # 日志框架
+        # Log frame
         self.log_frame.grid(row=5, column=0, columnspan=2, pady=(0, 10), sticky=(tk.W, tk.E, tk.N, tk.S))
         self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # 状态栏
+        # Status bar
         self.status_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E))
         self.status_indicator.grid(row=0, column=0, padx=(0, 5))
         self.status_label.grid(row=0, column=1, sticky=(tk.W, tk.E))
         
-        # 配置网格权重
+        # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         self.main_frame.columnconfigure(0, weight=1)
@@ -284,29 +292,39 @@ class HostsOptimizerGUI:
         self.progress_frame.columnconfigure(0, weight=1)
         self.status_frame.columnconfigure(0, weight=1)
     
-    def log_message(self, message: str, level: str = "INFO"):
-        """添加简易日志消息"""
+    def log_message(self, message: str, level: str = "INFO") -> None:
+        """Add simple log message - public interface."""
+        self._log_message(message, level)
+    
+    def _log_message(self, message: str, level: str = "INFO") -> None:
+        """Add simple log message."""
         timestamp = time.strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {level}: {message}"
         self.simple_logs.append(log_entry)
         self.log_queue.put(log_entry + "\n")
     
-    def log_detailed(self, message: str, level: str = "INFO", category: str = "GENERAL"):
-        """添加详细日志消息"""
-        # 使用datetime获取毫秒精度的时间戳
+    def log_detailed(self, message: str, level: str = "INFO", category: str = "GENERAL") -> None:
+        """Add detailed log message - public interface."""
+        self._log_detailed(message, level, category)
+    
+    def _log_detailed(self, message: str, level: str = "INFO", category: str = "GENERAL") -> None:
+        """Add detailed log message."""
+        # Use datetime for millisecond precision timestamp
         from datetime import datetime
         now = datetime.now()
-        timestamp = now.strftime("%H:%M:%S.%f")[:-3]  # 包含毫秒
+        timestamp = now.strftime("%H:%M:%S.%f")[:-3]  # Include milliseconds
         log_entry = f"[{timestamp}] [{category}] {level}: {message}"
         self.detailed_logs.append(log_entry)
-        # 如果当前显示详细日志，立即更新
+        # If currently displaying detailed logs, update immediately
         if self.log_type_var.get() == "detailed":
             self.log_queue.put(log_entry + "\n")
     
-    def update_progress(self, phase: str, current: int = 0, total: int = 0, detail: str = ""):
-        """更新进度显示"""
-        import time
-        
+    def update_progress(self, phase: str, current: int = 0, total: int = 0, detail: str = "") -> None:
+        """Update progress display - public interface."""
+        self._update_progress(phase, current, total, detail)
+    
+    def _update_progress(self, phase: str, current: int = 0, total: int = 0, detail: str = "") -> None:
+        """Update progress display."""
         self.current_phase = phase
         if total > 0:
             self.total_ips = total
@@ -314,7 +332,7 @@ class HostsOptimizerGUI:
             progress = int((current / total) * 100)
             self.progress_bar['value'] = progress
             
-            # 计算时间估算
+            # Calculate time estimation
             time_info = ""
             if current > 0 and self.start_time:
                 elapsed = time.time() - self.start_time
@@ -330,12 +348,12 @@ class HostsOptimizerGUI:
             self.progress_bar['value'] = 0
             self.progress_text.config(text=f"{phase} - {detail}")
         
-        # 更新状态标签和指示器
+        # Update status label and indicator
         self.status_label.config(text=f"{phase} - {detail}")
-        self.update_status_indicator(phase)
+        self._update_status_indicator(phase)
     
-    def update_status_indicator(self, phase: str):
-        """更新状态指示器"""
+    def _update_status_indicator(self, phase: str) -> None:
+        """Update status indicator."""
         if phase == "完成":
             self.status_indicator.config(text="●", foreground="green")
         elif phase == "失败":
@@ -347,12 +365,16 @@ class HostsOptimizerGUI:
         else:
             self.status_indicator.config(text="●", foreground="gray")
     
-    def switch_log_type(self):
-        """切换日志类型"""
-        self.update_log_display()
+    def switch_log_type(self) -> None:
+        """Switch log type - public interface."""
+        self._switch_log_type()
     
-    def update_log_display(self):
-        """更新日志显示"""
+    def _switch_log_type(self) -> None:
+        """Switch log type."""
+        self._update_log_display()
+    
+    def _update_log_display(self) -> None:
+        """Update log display."""
         self.log_text.config(state="normal")
         self.log_text.delete(1.0, tk.END)
         
@@ -367,16 +389,24 @@ class HostsOptimizerGUI:
         self.log_text.config(state="disabled")
         self.log_text.see(tk.END)
     
-    def clear_log(self):
-        """清空日志"""
+    def clear_log(self) -> None:
+        """Clear logs - public interface."""
+        self._clear_log()
+    
+    def _clear_log(self) -> None:
+        """Clear logs."""
         if self.log_type_var.get() == "simple":
             self.simple_logs.clear()
         else:
             self.detailed_logs.clear()
-        self.update_log_display()
+        self._update_log_display()
     
-    def save_log(self):
-        """保存日志到文件"""
+    def save_log(self) -> None:
+        """Save logs to file - public interface."""
+        self._save_log()
+    
+    def _save_log(self) -> None:
+        """Save logs to file."""
         if self.log_type_var.get() == "simple":
             logs = self.simple_logs
             filename = f"hosts_optimizer_simple_{time.strftime('%Y%m%d_%H%M%S')}.log"
@@ -396,8 +426,8 @@ class HostsOptimizerGUI:
         except Exception as e:
             messagebox.showerror("错误", f"保存日志失败: {str(e)}")
     
-    def update_log(self):
-        """更新日志显示"""
+    def _update_log(self) -> None:
+        """Update log display."""
         try:
             while True:
                 message = self.log_queue.get_nowait()
@@ -408,11 +438,15 @@ class HostsOptimizerGUI:
         except queue.Empty:
             pass
         
-        # 每100ms更新一次
-        self.root.after(100, self.update_log)
+        # Update every 100ms
+        self.root.after(100, self._update_log)
     
-    def start_test(self):
-        """开始测试 - 使用真正并行处理"""
+    def start_test(self) -> None:
+        """Start testing - public interface."""
+        self._start_test()
+    
+    def _start_test(self) -> None:
+        """Start testing using true parallel processing."""
         if not TRUE_PARALLEL_AVAILABLE:
             messagebox.showerror("功能不可用", 
                 "真正并行测试功能需要安装 aiohttp 库。\n\n"
@@ -428,43 +462,47 @@ class HostsOptimizerGUI:
         self.stop_button.config(state="normal")
         self.update_hosts_button.config(state="disabled")
         
-        # 清空结果
+        # Clear results
         self.test_results.clear()
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         
-        # 清空日志
+        # Clear logs
         self.simple_logs.clear()
         self.detailed_logs.clear()
         self.log_text.config(state="normal")
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state="disabled")
         
-        # 初始化进度
+        # Initialize progress
         self.progress_bar['value'] = 0
         self.progress_label.config(text="🚀 并行测试中...")
-        self.start_time = time.time()  # 记录开始时间
-        self.update_progress("初始化", 0, 0, "准备并行测试环境")
+        self.start_time = time.time()  # Record start time
+        self._update_progress("初始化", 0, 0, "准备并行测试环境")
         
-        # 记录开始测试的详细日志
-        self.log_message("🚀 启动并行测试模式", "INFO")
-        self.log_detailed("使用异步IO和协程实现并行处理", "INFO", "PARALLEL_TEST")
-        self.log_detailed("清空历史数据和日志", "DEBUG", "CLEANUP")
+        # Log test start
+        self._log_message("🚀 启动并行测试模式", "INFO")
+        self._log_detailed("使用异步IO和协程实现并行处理", "INFO", "PARALLEL_TEST")
+        self._log_detailed("清空历史数据和日志", "DEBUG", "CLEANUP")
         
-        # 在新线程中运行并行测试
+        # Run parallel test in new thread
         self.test_thread = threading.Thread(target=self.run_true_parallel_test, daemon=True)
         self.test_thread.start()
     
     
-    def stop_test(self):
-        """停止测试"""
+    def stop_test(self) -> None:
+        """Stop testing - public interface."""
+        self._stop_test()
+    
+    def _stop_test(self) -> None:
+        """Stop testing."""
         self.is_running = False
         self.start_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.progress_bar.stop()
         self.progress_label.config(text="已停止")
         self.status_label.config(text="测试已停止")
-        self.log_message("用户停止了测试", "WARNING")
+        self._log_message("用户停止了测试", "WARNING")
     
     def run_test(self):
         """运行测试（在后台线程中）"""
@@ -1184,13 +1222,13 @@ class HostsOptimizerGUI:
         else:
             self.root.destroy()
     
-    def run(self):
-        """运行 GUI"""
+    def run(self) -> None:
+        """Run the GUI application."""
         self.root.mainloop()
 
 
-def main():
-    """主函数"""
+def main() -> None:
+    """Main function."""
     try:
         app = HostsOptimizerGUI()
         app.run()

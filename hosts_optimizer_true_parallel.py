@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-真正并行的Hosts优化器 - 集成版本
-将异步IO和真正并行处理集成到现有架构中，解决串行等待问题
+"""True parallel Hosts optimizer - integrated version.
+
+This module integrates async I/O and true parallel processing into the existing
+architecture to solve serial waiting issues.
 """
 
 import asyncio
-import aiohttp
-import socket
-import time
-import statistics
-import ssl
 import json
+import platform
+import queue
+import socket
+import ssl
+import statistics
+import subprocess
 import threading
-from typing import List, Dict, Tuple, Optional, Set, Callable
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-import subprocess
-import platform
-from collections import deque
-import queue
+from typing import Callable, Dict, List, Optional, Set, Tuple
+
+import aiohttp
 
 
 @dataclass
 class TrueParallelResult:
-    """真正并行测试结果"""
+    """True parallel test result.
+    
+    This dataclass represents the result of a parallel IP test,
+    containing all relevant metrics and information.
+    """
     ip: str
     ping_latency: float
     ping_success: bool
@@ -43,44 +49,53 @@ class TrueParallelResult:
 
 
 class TrueParallelTester:
-    """真正并行的测试器 - 解决串行等待问题"""
+    """True parallel tester - solves serial waiting issues.
     
-    def __init__(self, config: Dict):
-        self.config = config
-        self.session = None
-        self.connector = None
-        self.semaphore = None
-        self.results_queue = queue.Queue()
-        self.progress_callback = None
+    This class provides true parallel testing capabilities using async I/O
+    to eliminate serial waiting and improve performance.
+    """
+    
+    def __init__(self, config: Dict) -> None:
+        """Initialize the true parallel tester.
         
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        # 创建优化的连接器
+        Args:
+            config: Configuration dictionary for testing parameters.
+        """
+        self.config = config
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.connector: Optional[aiohttp.TCPConnector] = None
+        self.semaphore: Optional[asyncio.Semaphore] = None
+        self.results_queue: queue.Queue = queue.Queue()
+        self.progress_callback: Optional[Callable] = None
+        
+    async def __aenter__(self) -> 'TrueParallelTester':
+        """Async context manager entry."""
+        # Create optimized connector
         max_connections = self.config.get("max_concurrent_requests", 100)
         self.semaphore = asyncio.Semaphore(max_connections)
         
         self.connector = aiohttp.TCPConnector(
             limit=max_connections,
             limit_per_host=self.config.get("max_per_host", 30),
-            ttl_dns_cache=0,  # 禁用DNS缓存避免缓存错误
-            use_dns_cache=False,  # 禁用DNS缓存
+            ttl_dns_cache=0,  # Disable DNS cache to avoid cache errors
+            use_dns_cache=False,  # Disable DNS cache
             enable_cleanup_closed=True,
-            force_close=False,  # 允许连接复用，避免连接问题
-            family=0,  # 允许IPv4和IPv6
-            ssl=False,  # 在连接器级别禁用SSL，在请求级别处理
-            resolver=None,  # 使用默认解析器
-            local_addr=None,  # 不绑定本地地址
-            keepalive_timeout=30  # 保持连接活跃
+            force_close=False,  # Allow connection reuse to avoid connection issues
+            family=0,  # Allow both IPv4 and IPv6
+            ssl=False,  # Disable SSL at connector level, handle at request level
+            resolver=None,  # Use default resolver
+            local_addr=None,  # Don't bind to local address
+            keepalive_timeout=30  # Keep connections alive
         )
         
-        # 创建超时配置
+        # Create timeout configuration
         timeout = aiohttp.ClientTimeout(
             total=self.config.get("http_timeout", 8),
             connect=self.config.get("connect_timeout", 3),
             sock_read=self.config.get("read_timeout", 5)
         )
         
-        # 创建会话
+        # Create session
         self.session = aiohttp.ClientSession(
             connector=self.connector,
             timeout=timeout,
@@ -88,15 +103,24 @@ class TrueParallelTester:
         )
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
         if self.session:
             await self.session.close()
         if self.connector:
             await self.connector.close()
     
-    def test_ips_true_parallel(self, ips: List[str], domain: str, progress_callback: Callable = None) -> List[TrueParallelResult]:
-        """真正并行的IP测试 - 解决串行等待问题"""
+    def test_ips_true_parallel(self, ips: List[str], domain: str, progress_callback: Optional[Callable] = None) -> List[TrueParallelResult]:
+        """Test IPs with true parallel processing - solves serial waiting issues.
+        
+        Args:
+            ips: List of IP addresses to test.
+            domain: Domain name for testing.
+            progress_callback: Optional callback for progress updates.
+            
+        Returns:
+            List of test results.
+        """
         if not ips:
             return []
         
@@ -105,7 +129,7 @@ class TrueParallelTester:
         print(f"📊 测试IP数量: {len(ips)}")
         print(f"⚡ 最大并发数: {self.config.get('max_concurrent_requests', 100)}")
         
-        # 在新的事件循环中运行异步测试
+        # Run async tests in new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -116,18 +140,26 @@ class TrueParallelTester:
             loop.close()
     
     async def _test_all_ips_async(self, ips: List[str], domain: str) -> List[TrueParallelResult]:
-        """异步测试所有IP"""
+        """Test all IPs asynchronously.
+        
+        Args:
+            ips: List of IP addresses to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            List of test results sorted by score.
+        """
         async with self:
             start_time = time.time()
             results = []
             
-            # 创建所有测试任务 - 真正的并行
+            # Create all test tasks - true parallel
             tasks = []
             for ip in ips:
                 task = asyncio.create_task(self._test_single_ip_async(ip, domain))
                 tasks.append(task)
             
-            # 使用as_completed获取完成的任务，实现真正的并行处理
+            # Use as_completed to get completed tasks, achieving true parallel processing
             completed_count = 0
             for coro in asyncio.as_completed(tasks):
                 try:
@@ -135,21 +167,21 @@ class TrueParallelTester:
                     results.append(result)
                     completed_count += 1
                     
-                    # 实时进度回调
+                    # Real-time progress callback
                     if self.progress_callback:
                         self.progress_callback(completed_count, len(ips), result.ip)
                     
-                    # 实时显示结果
+                    # Real-time result display
                     self._display_result(result)
                     
-                    # 将结果放入队列供GUI使用
+                    # Put result in queue for GUI use
                     self.results_queue.put(result)
                     
                 except Exception as e:
                     print(f"❌ 测试异常: {e}")
                     completed_count += 1
             
-            # 按评分排序
+            # Sort by score
             results.sort(key=lambda x: x.overall_score, reverse=True)
             
             total_time = time.time() - start_time
@@ -160,24 +192,32 @@ class TrueParallelTester:
             return results
     
     async def _test_single_ip_async(self, ip: str, domain: str) -> TrueParallelResult:
-        """异步测试单个IP - 所有测试真正并行执行"""
-        async with self.semaphore:  # 限制并发数
+        """Test a single IP asynchronously - all tests truly parallel.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            Test result for the IP.
+        """
+        async with self.semaphore:  # Limit concurrency
             start_time = time.time()
             
-            # 并行执行所有测试任务
+            # Execute all test tasks in parallel
             tasks = [
                 self._ping_async(ip),
                 self._test_http_async(ip, domain),
                 self._test_https_async(ip, domain),
                 self._test_ssl_async(ip, domain),
                 self._health_check_async(ip, domain),
-                self._test_connection_async(ip)  # 添加基础连接测试
+                self._test_connection_async(ip)  # Add basic connection test
             ]
             
-            # 等待所有任务完成 - 真正的并行等待
+            # Wait for all tasks to complete - true parallel waiting
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # 解析结果
+            # Parse results
             ping_result = results[0] if not isinstance(results[0], Exception) else (0, False)
             http_result = results[1] if not isinstance(results[1], Exception) else {'available': False, 'status': 0, 'latency': 999}
             https_result = results[2] if not isinstance(results[2], Exception) else {'available': False, 'status': 0, 'latency': 999}
@@ -185,7 +225,7 @@ class TrueParallelTester:
             health_result = results[4] if not isinstance(results[4], Exception) else None
             connection_result = results[5] if not isinstance(results[5], Exception) else {'available': False, 'latency': 999}
             
-            # 计算综合评分
+            # Calculate comprehensive score
             overall_score = self._calculate_comprehensive_score(
                 ping_result, http_result, https_result, ssl_result, health_result, connection_result
             )
@@ -210,12 +250,19 @@ class TrueParallelTester:
             )
     
     async def _ping_async(self, ip: str) -> Tuple[float, bool]:
-        """异步Ping测试 - 使用线程池避免阻塞"""
+        """Async ping test - use thread pool to avoid blocking.
+        
+        Args:
+            ip: IP address to ping.
+            
+        Returns:
+            Tuple of (latency, success).
+        """
         try:
             loop = asyncio.get_event_loop()
             start_time = time.time()
             
-            # 在线程池中执行ping
+            # Execute ping in thread pool
             result = await loop.run_in_executor(
                 None, 
                 self._ping_sync, 
@@ -230,25 +277,41 @@ class TrueParallelTester:
             return (999, False)
     
     def _ping_sync(self, ip: str, timeout: int) -> bool:
-        """同步Ping实现"""
+        """Synchronous ping implementation.
+        
+        Args:
+            ip: IP address to ping.
+            timeout: Timeout in seconds.
+            
+        Returns:
+            True if ping successful, False otherwise.
+        """
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             result = sock.connect_ex((ip, 80))
             sock.close()
             return result == 0
-        except:
+        except Exception:
             return False
     
     async def _test_http_async(self, ip: str, domain: str) -> Dict:
-        """异步HTTP测试"""
+        """Async HTTP test.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            Dictionary with test results.
+        """
         try:
             url = f"http://{ip}/"
             start_time = time.time()
             
-            # 设置更完整的请求头 - 恢复Host头但使用正确的格式
+            # Set more complete request headers - restore Host header with correct format
             headers = {
-                'Host': domain,  # 恢复Host头，这对CDN服务器很重要
+                'Host': domain,  # Restore Host header, important for CDN servers
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
@@ -257,16 +320,16 @@ class TrueParallelTester:
                 'Upgrade-Insecure-Requests': '1'
             }
             
-            # 添加超时和重试机制
+            # Add timeout and retry mechanism
             timeout = aiohttp.ClientTimeout(
-                total=10,  # 总超时
-                connect=5,  # 连接超时
-                sock_read=5  # 读取超时
+                total=10,  # Total timeout
+                connect=5,  # Connection timeout
+                sock_read=5  # Read timeout
             )
             
             async with self.session.get(url, headers=headers, timeout=timeout) as response:
                 latency = time.time() - start_time
-                # 更宽松的状态码判断 - 403表示服务器可达但需要认证，应该算作成功
+                # More lenient status code judgment - 403 means server is reachable but needs auth, should count as success
                 available = response.status in [200, 201, 204, 301, 302, 303, 307, 308, 400, 401, 403, 404, 405, 500, 502, 503]
                 return {
                     'available': available,
@@ -275,25 +338,33 @@ class TrueParallelTester:
                 }
         except asyncio.TimeoutError:
             return {'available': False, 'status': 0, 'latency': 999}
-        except aiohttp.ClientConnectorError as e:
-            # 连接错误，可能是IP不可达
+        except aiohttp.ClientConnectorError:
+            # Connection error, IP may be unreachable
             return {'available': False, 'status': 0, 'latency': 999}
-        except aiohttp.ClientError as e:
-            # 其他客户端错误
+        except aiohttp.ClientError:
+            # Other client errors
             return {'available': False, 'status': 0, 'latency': 999}
-        except Exception as e:
-            # 其他未知错误
+        except Exception:
+            # Other unknown errors
             return {'available': False, 'status': 0, 'latency': 999}
     
     async def _test_https_async(self, ip: str, domain: str) -> Dict:
-        """异步HTTPS测试"""
+        """Async HTTPS test.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            Dictionary with test results.
+        """
         try:
             url = f"https://{ip}/"
             start_time = time.time()
             
-            # 设置更完整的请求头 - 恢复Host头但使用正确的格式
+            # Set more complete request headers - restore Host header with correct format
             headers = {
-                'Host': domain,  # 恢复Host头，这对CDN服务器很重要
+                'Host': domain,  # Restore Host header, important for CDN servers
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
@@ -302,22 +373,22 @@ class TrueParallelTester:
                 'Upgrade-Insecure-Requests': '1'
             }
             
-            # 创建SSL上下文 - 更宽松的SSL设置
+            # Create SSL context - more lenient SSL settings
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
-            ssl_context.set_ciphers('DEFAULT:@SECLEVEL=0')  # 降低安全级别以兼容更多服务器
+            ssl_context.set_ciphers('DEFAULT:@SECLEVEL=0')  # Lower security level for compatibility
             
-            # 添加超时配置
+            # Add timeout configuration
             timeout = aiohttp.ClientTimeout(
-                total=10,  # 总超时
-                connect=5,  # 连接超时
-                sock_read=5  # 读取超时
+                total=10,  # Total timeout
+                connect=5,  # Connection timeout
+                sock_read=5  # Read timeout
             )
             
             async with self.session.get(url, headers=headers, ssl=ssl_context, timeout=timeout) as response:
                 latency = time.time() - start_time
-                # 更宽松的状态码判断 - 403表示服务器可达但需要认证，应该算作成功
+                # More lenient status code judgment - 403 means server is reachable but needs auth, should count as success
                 available = response.status in [200, 201, 204, 301, 302, 303, 307, 308, 400, 401, 403, 404, 405, 500, 502, 503]
                 return {
                     'available': available,
@@ -326,36 +397,43 @@ class TrueParallelTester:
                 }
         except asyncio.TimeoutError:
             return {'available': False, 'status': 0, 'latency': 999}
-        except aiohttp.ClientConnectorError as e:
-            # 连接错误，可能是IP不可达
+        except aiohttp.ClientConnectorError:
+            # Connection error, IP may be unreachable
             return {'available': False, 'status': 0, 'latency': 999}
-        except aiohttp.ClientError as e:
-            # 其他客户端错误
+        except aiohttp.ClientError:
+            # Other client errors
             return {'available': False, 'status': 0, 'latency': 999}
-        except ssl.SSLError as e:
-            # SSL错误
+        except ssl.SSLError:
+            # SSL errors
             return {'available': False, 'status': 0, 'latency': 999}
-        except Exception as e:
-            # 其他未知错误
+        except Exception:
+            # Other unknown errors
             return {'available': False, 'status': 0, 'latency': 999}
     
     async def _test_connection_async(self, ip: str) -> Dict:
-        """异步基础连接测试 - 测试IP是否可达"""
+        """Async basic connection test - test if IP is reachable.
+        
+        Args:
+            ip: IP address to test.
+            
+        Returns:
+            Dictionary with connection test results.
+        """
         try:
             start_time = time.time()
             
-            # 测试多个常用端口
+            # Test multiple common ports
             ports_to_test = [80, 443, 8080, 8443]
             for port in ports_to_test:
                 try:
-                    # 使用asyncio进行非阻塞连接测试
+                    # Use asyncio for non-blocking connection test
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None,
                         self._test_port_sync,
                         ip,
                         port,
-                        3  # 3秒超时
+                        3  # 3 second timeout
                     )
                     if result:
                         latency = time.time() - start_time
@@ -367,7 +445,7 @@ class TrueParallelTester:
                 except Exception:
                     continue
             
-            # 如果所有端口都失败，返回不可用
+            # If all ports fail, return unavailable
             return {'available': False, 'latency': 999, 'port': 0}
             
         except Exception as e:
@@ -375,18 +453,35 @@ class TrueParallelTester:
             return {'available': False, 'latency': 999, 'port': 0}
     
     def _test_port_sync(self, ip: str, port: int, timeout: int) -> bool:
-        """同步端口测试"""
+        """Synchronous port test.
+        
+        Args:
+            ip: IP address to test.
+            port: Port number to test.
+            timeout: Timeout in seconds.
+            
+        Returns:
+            True if port is open, False otherwise.
+        """
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             result = sock.connect_ex((ip, port))
             sock.close()
             return result == 0
-        except:
+        except Exception:
             return False
     
     async def _test_ssl_async(self, ip: str, domain: str) -> Optional[Dict]:
-        """异步SSL证书检查"""
+        """Async SSL certificate check.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            SSL certificate information or None if disabled.
+        """
         if not self.config.get("ssl_check_enabled", True):
             return None
             
@@ -403,7 +498,15 @@ class TrueParallelTester:
             return None
     
     def _check_ssl_sync(self, ip: str, domain: str) -> Dict:
-        """同步SSL证书检查"""
+        """Synchronous SSL certificate check.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            SSL certificate information.
+        """
         try:
             context = ssl.create_default_context()
             context.check_hostname = True
@@ -439,7 +542,15 @@ class TrueParallelTester:
             }
     
     async def _health_check_async(self, ip: str, domain: str) -> Optional[Dict]:
-        """异步健康检查 - 多维度并行检查"""
+        """Async health check - multi-dimensional parallel check.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            Health check information or None if disabled.
+        """
         if not self.config.get("multi_dimensional_health", True):
             return None
             
@@ -499,9 +610,17 @@ class TrueParallelTester:
     
     
     async def _check_protocol_support_async(self, ip: str, domain: str) -> Dict:
-        """异步协议支持检查"""
+        """Async protocol support check.
+        
+        Args:
+            ip: IP address to test.
+            domain: Domain name for testing.
+            
+        Returns:
+            Protocol support check results.
+        """
         try:
-            # 并行检查HTTP/HTTPS协议支持
+            # Check HTTP/HTTPS protocol support in parallel
             http_task = asyncio.create_task(self._test_http_async(ip, domain))
             https_task = asyncio.create_task(self._test_https_async(ip, domain))
             
@@ -522,7 +641,14 @@ class TrueParallelTester:
             return {'protocol_score': 50}
     
     def _get_health_grade(self, score: float) -> str:
-        """根据健康评分获取等级"""
+        """Get health grade based on score.
+        
+        Args:
+            score: Health score (0.0-1.0).
+            
+        Returns:
+            Health grade (A-F).
+        """
         if score >= 0.9:
             return 'A'
         elif score >= 0.8:
@@ -536,7 +662,19 @@ class TrueParallelTester:
     
     def _calculate_comprehensive_score(self, ping_result: Tuple, http_result: Dict, https_result: Dict, 
                                      ssl_result: Optional[Dict], health_result: Optional[Dict], connection_result: Dict) -> float:
-        """计算综合评分 - 优化后的评分算法"""
+        """Calculate comprehensive score - optimized scoring algorithm.
+        
+        Args:
+            ping_result: Ping test results.
+            http_result: HTTP test results.
+            https_result: HTTPS test results.
+            ssl_result: SSL certificate results.
+            health_result: Health check results.
+            connection_result: Connection test results.
+            
+        Returns:
+            Comprehensive score (0.0-100.0).
+        """
         
         # 基础评分组件
         ping_score = self._calculate_ping_score(ping_result)
@@ -565,40 +703,54 @@ class TrueParallelTester:
         return round(final_score, 1)  # 保留一位小数
     
     def _calculate_ping_score(self, ping_result: Tuple) -> float:
-        """计算Ping延迟评分 (0-100分)"""
+        """Calculate ping latency score (0-100 points).
+        
+        Args:
+            ping_result: Ping test results tuple (latency, success).
+            
+        Returns:
+            Ping score (0.0-100.0).
+        """
         ping_latency, ping_success = ping_result
         
         if not ping_success:
             return 0.0
         
-        # 使用指数衰减函数，延迟越低分数越高
-        if ping_latency <= 0.05:    # 极低延迟
+        # Use exponential decay function, lower latency = higher score
+        if ping_latency <= 0.05:    # Very low latency
             return 100.0
-        elif ping_latency <= 0.1:   # 低延迟
+        elif ping_latency <= 0.1:   # Low latency
             return 95.0
-        elif ping_latency <= 0.2:   # 中等延迟
+        elif ping_latency <= 0.2:   # Medium latency
             return 85.0
-        elif ping_latency <= 0.5:   # 较高延迟
+        elif ping_latency <= 0.5:   # High latency
             return 70.0
-        elif ping_latency <= 1.0:   # 高延迟
+        elif ping_latency <= 1.0:   # Very high latency
             return 50.0
-        elif ping_latency <= 2.0:   # 很高延迟
+        elif ping_latency <= 2.0:   # Extremely high latency
             return 30.0
-        else:                       # 极高延迟
+        else:                       # Ultra high latency
             return max(10.0, 100.0 / (ping_latency + 1))
     
     def _calculate_http_score(self, http_result: Dict) -> float:
-        """计算HTTP服务评分 (0-100分)"""
+        """Calculate HTTP service score (0-100 points).
+        
+        Args:
+            http_result: HTTP test results.
+            
+        Returns:
+            HTTP score (0.0-100.0).
+        """
         if not http_result.get('available', False):
             if http_result.get('status', 0) > 0:
-                # 有响应但不是可用状态码
+                # Has response but not available status code
                 return min(30.0, http_result.get('status', 0) / 10.0)
             return 0.0
         
         status = http_result.get('status', 0)
         latency = http_result.get('latency', 999)
         
-        # 根据状态码评分
+        # Score based on status code
         if status == 200:
             base_score = 100.0
         elif status in [301, 302, 307, 308]:
@@ -606,13 +758,13 @@ class TrueParallelTester:
         elif status in [201, 204]:
             base_score = 85.0
         elif status in [400, 401, 403, 404, 405]:
-            base_score = 60.0  # 服务器响应但请求有问题
+            base_score = 60.0  # Server responds but request has issues
         elif status in [500, 502, 503, 504]:
-            base_score = 40.0  # 服务器错误
+            base_score = 40.0  # Server error
         else:
             base_score = 50.0
         
-        # 根据响应时间调整分数
+        # Adjust score based on response time
         if latency <= 0.5:
             time_bonus = 0
         elif latency <= 1.0:
@@ -625,17 +777,24 @@ class TrueParallelTester:
         return max(0.0, base_score + time_bonus)
     
     def _calculate_https_score(self, https_result: Dict) -> float:
-        """计算HTTPS服务评分 (0-100分)"""
+        """Calculate HTTPS service score (0-100 points).
+        
+        Args:
+            https_result: HTTPS test results.
+            
+        Returns:
+            HTTPS score (0.0-100.0).
+        """
         if not https_result.get('available', False):
             if https_result.get('status', 0) > 0:
-                # 有响应但不是可用状态码
+                # Has response but not available status code
                 return min(25.0, https_result.get('status', 0) / 15.0)
             return 0.0
         
         status = https_result.get('status', 0)
         latency = https_result.get('latency', 999)
         
-        # HTTPS评分标准与HTTP类似，但权重稍高
+        # HTTPS scoring similar to HTTP but with slightly higher weights
         if status == 200:
             base_score = 100.0
         elif status in [301, 302, 307, 308]:
@@ -649,7 +808,7 @@ class TrueParallelTester:
         else:
             base_score = 55.0
         
-        # 根据响应时间调整分数
+        # Adjust score based on response time
         if latency <= 0.5:
             time_bonus = 0
         elif latency <= 1.0:
@@ -662,35 +821,51 @@ class TrueParallelTester:
         return max(0.0, base_score + time_bonus)
     
     def _calculate_ssl_score(self, ssl_result: Optional[Dict]) -> float:
-        """计算SSL证书评分 (0-100分)"""
+        """Calculate SSL certificate score (0-100 points).
+        
+        Args:
+            ssl_result: SSL certificate test results.
+            
+        Returns:
+            SSL score (0.0-100.0).
+        """
         if not ssl_result:
-            return 50.0  # 未测试SSL，给予中等分数
+            return 50.0  # No SSL test, give medium score
         
         if not ssl_result.get('ssl_available', False):
             return 0.0
         
-        score = 50.0  # 基础SSL可用分数
+        score = 50.0  # Base SSL available score
         
-        # 证书有效性加分
+        # Certificate validity bonus
         if ssl_result.get('certificate_valid', False):
             score += 30.0
             
-            # 主机名验证加分
+            # Hostname verification bonus
             if ssl_result.get('hostname_verified', False):
                 score += 20.0
             else:
                 score += 10.0
         else:
-            score += 10.0  # SSL可用但证书有问题
+            score += 10.0  # SSL available but certificate has issues
         
         return min(100.0, score)
     
     def _calculate_connection_score(self, connection_result: Dict, http_result: Dict, https_result: Dict) -> float:
-        """计算连接稳定性评分 (0-100分)"""
+        """Calculate connection stability score (0-100 points).
+        
+        Args:
+            connection_result: Connection test results.
+            http_result: HTTP test results.
+            https_result: HTTPS test results.
+            
+        Returns:
+            Connection score (0.0-100.0).
+        """
         if not connection_result.get('available', False):
             return 0.0
         
-        # 如果HTTP和HTTPS都失败但连接可用，给予基础分数
+        # If both HTTP and HTTPS fail but connection is available, give base score
         if not http_result.get('available', False) and not https_result.get('available', False):
             latency = connection_result.get('latency', 999)
             if latency <= 1.0:
@@ -700,7 +875,7 @@ class TrueParallelTester:
             else:
                 return 40.0
         
-        # 如果HTTP或HTTPS可用，连接测试作为稳定性指标
+        # If HTTP or HTTPS is available, connection test as stability indicator
         latency = connection_result.get('latency', 999)
         if latency <= 0.5:
             return 100.0
@@ -712,10 +887,20 @@ class TrueParallelTester:
             return max(60.0, 100.0 / (latency + 0.5))
     
     def _calculate_stability_score(self, ping_result: Tuple, http_result: Dict, https_result: Dict, connection_result: Dict) -> float:
-        """计算综合稳定性评分 (0-100分)"""
+        """Calculate comprehensive stability score (0-100 points).
+        
+        Args:
+            ping_result: Ping test results.
+            http_result: HTTP test results.
+            https_result: HTTPS test results.
+            connection_result: Connection test results.
+            
+        Returns:
+            Stability score (0.0-100.0).
+        """
         stability_indicators = []
         
-        # Ping稳定性
+        # Ping stability
         ping_latency, ping_success = ping_result
         if ping_success and ping_latency <= 2.0:
             stability_indicators.append(1.0)
@@ -724,7 +909,7 @@ class TrueParallelTester:
         else:
             stability_indicators.append(0.0)
         
-        # HTTP稳定性
+        # HTTP stability
         if http_result.get('available', False):
             stability_indicators.append(1.0)
         elif http_result.get('status', 0) > 0:
@@ -732,7 +917,7 @@ class TrueParallelTester:
         else:
             stability_indicators.append(0.0)
         
-        # HTTPS稳定性
+        # HTTPS stability
         if https_result.get('available', False):
             stability_indicators.append(1.0)
         elif https_result.get('status', 0) > 0:
@@ -740,21 +925,25 @@ class TrueParallelTester:
         else:
             stability_indicators.append(0.0)
         
-        # 连接稳定性
+        # Connection stability
         if connection_result.get('available', False):
             stability_indicators.append(1.0)
         else:
             stability_indicators.append(0.0)
         
-        # 计算平均稳定性
+        # Calculate average stability
         if stability_indicators:
             avg_stability = sum(stability_indicators) / len(stability_indicators)
             return avg_stability * 100.0
         else:
             return 0.0
     
-    def _display_result(self, result: TrueParallelResult):
-        """显示单个测试结果"""
+    def _display_result(self, result: TrueParallelResult) -> None:
+        """Display single test result.
+        
+        Args:
+            result: Test result to display.
+        """
         status_icons = {
             True: "✅",
             False: "❌"
@@ -768,20 +957,38 @@ class TrueParallelTester:
               f"耗时: {result.test_duration:.2f}s")
 
 
-# 集成到现有架构的适配器类
+# Adapter class for integration with existing architecture
 class TrueParallelOptimizerAdapter:
-    """真正并行优化器适配器 - 集成到现有GUI"""
+    """True parallel optimizer adapter - integrates with existing GUI.
     
-    def __init__(self, config: Dict):
+    This class provides a bridge between the true parallel testing system
+    and the existing GUI interface.
+    """
+    
+    def __init__(self, config: Dict) -> None:
+        """Initialize the adapter.
+        
+        Args:
+            config: Configuration dictionary for testing parameters.
+        """
         self.config = config
         self.tester = TrueParallelTester(config)
     
-    def test_ips_with_true_parallel(self, ips: List[str], domain: str, progress_callback: Callable = None) -> List[Dict]:
-        """使用真正并行测试IP，返回兼容现有GUI的格式"""
-        # 执行真正并行测试
+    def test_ips_with_true_parallel(self, ips: List[str], domain: str, progress_callback: Optional[Callable] = None) -> List[Dict]:
+        """Test IPs with true parallel processing, return GUI-compatible format.
+        
+        Args:
+            ips: List of IP addresses to test.
+            domain: Domain name for testing.
+            progress_callback: Optional callback for progress updates.
+            
+        Returns:
+            List of test results in GUI-compatible format.
+        """
+        # Execute true parallel testing
         results = self.tester.test_ips_true_parallel(ips, domain, progress_callback)
         
-        # 转换为现有GUI期望的格式
+        # Convert to GUI-expected format
         converted_results = []
         for result in results:
             converted_result = {

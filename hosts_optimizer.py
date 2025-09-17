@@ -1,54 +1,67 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Hosts 选优脚本
-用于测试 ar-gcp-cdn.bistudio.com 的不同 IP 地址延迟，并选择最优的 IP 更新到 hosts 文件
+"""Hosts optimization script.
+
+This module is used to test different IP addresses of ar-gcp-cdn.bistudio.com
+for latency and select the optimal IP to update the hosts file.
 """
 
-import socket
-import time
-import subprocess
-import platform
-import os
-import sys
-import json
-import statistics
 import hashlib
+import json
+import os
+import platform
 import random
-from typing import List, Dict, Tuple
+import socket
+import statistics
+import subprocess
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import dns.resolver
 import requests
-from urllib.parse import urlparse
+import ssl
 import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import ssl
-import socket
-from datetime import datetime
 
 
 class EnhancedDNSResolver:
-    """增强的DNS解析器"""
+    """Enhanced DNS resolver.
     
-    def __init__(self, domain: str):
+    This class provides advanced DNS resolution capabilities with caching
+    and verification to avoid DNS pollution and get accurate IP addresses.
+    """
+    
+    def __init__(self, domain: str) -> None:
+        """Initialize the DNS resolver.
+        
+        Args:
+            domain: The domain name to resolve.
+        """
         self.domain = domain
-        self.found_ips = set()
-        self.dns_cache = {}  # DNS查询缓存
-        self.verified_ips = set()  # 已验证的IP
+        self.found_ips: set = set()
+        self.dns_cache: Dict = {}  # DNS query cache
+        self.verified_ips: set = set()  # Verified IPs
         
     def resolve_all_ips(self) -> List[str]:
-        """使用真正的并行模式解析域名IP（避免本地DNS）"""
+        """Resolve domain IPs using true parallel mode (avoiding local DNS).
+        
+        Returns:
+            List of unique IP addresses found.
+        """
         print(f"正在全面解析 {self.domain} 的IP地址...")
         print("⚠️ 注意：为避免DNS污染，不使用本地DNS解析")
         print("🚀 使用并行模式，所有DNS服务器同时查询...")
         
-        # 收集所有DNS服务器
+        # Collect all DNS servers
         all_dns_servers = self._collect_all_dns_servers()
         print(f"📡 共收集到 {len(all_dns_servers)} 个权威DNS服务器")
         
-        # 真正并行查询所有DNS服务器
+        # Query all DNS servers in parallel
         with ThreadPoolExecutor(max_workers=min(50, len(all_dns_servers))) as executor:
             futures = {
                 executor.submit(self._query_single_dns, dns_server): dns_server 
@@ -60,12 +73,12 @@ class EnhancedDNSResolver:
                 try:
                     future.result()
                     completed += 1
-                    if completed % 10 == 0:  # 每完成10个显示进度
+                    if completed % 10 == 0:  # Show progress every 10 completions
                         print(f"📊 DNS查询进度: {completed}/{len(all_dns_servers)}")
                 except Exception:
                     continue
         
-        # 验证找到的IP地址
+        # Verify found IP addresses
         self._verify_found_ips()
         
         ip_list = list(self.found_ips)
@@ -76,10 +89,14 @@ class EnhancedDNSResolver:
         return ip_list
     
     def _collect_all_dns_servers(self) -> List[str]:
-        """收集所有可用的DNS服务器"""
+        """Collect all available DNS servers.
+        
+        Returns:
+            List of DNS server IP addresses.
+        """
         all_servers = []
         
-        # 主要公共DNS服务器
+        # Major public DNS servers
         all_servers.extend([
             "8.8.8.8", "8.8.4.4",  # Google DNS
             "1.1.1.1", "1.0.0.1",  # Cloudflare DNS
@@ -87,7 +104,7 @@ class EnhancedDNSResolver:
             "9.9.9.9", "149.112.112.112",  # Quad9 DNS
         ])
         
-        # 中国主要DNS服务器
+        # Chinese major DNS servers
         all_servers.extend([
             "114.114.114.114", "114.114.115.115",  # 114 DNS
             "223.5.5.5", "223.6.6.6",  # 阿里DNS
@@ -97,7 +114,7 @@ class EnhancedDNSResolver:
             "123.125.81.6", "123.125.81.7",  # 百度DNS备用
         ])
         
-        # 国际权威DNS服务器
+        # International authoritative DNS servers
         all_servers.extend([
             "76.76.19.61", "76.76.2.22",  # ControlD
             "94.140.14.14", "94.140.15.15",  # AdGuard DNS
@@ -112,7 +129,7 @@ class EnhancedDNSResolver:
             "1.1.1.3", "1.0.0.3",  # Cloudflare (恶意软件过滤)
         ])
         
-        # CDN和云服务提供商DNS
+        # CDN and cloud service provider DNS
         all_servers.extend([
             "199.85.126.10", "199.85.127.10",  # Norton ConnectSafe
             "156.154.70.1", "156.154.71.1",  # Neustar DNS
@@ -123,19 +140,23 @@ class EnhancedDNSResolver:
             "40.74.0.1", "40.74.0.2",  # Azure公共DNS
         ])
         
-        # 区域特定DNS服务器
+        # Regional specific DNS servers
         all_servers.extend([
             "168.126.63.1", "168.126.63.2",  # 韩国DNS
             "202.106.0.20", "202.106.46.151",  # 中国电信DNS
             "202.96.209.5", "202.96.209.133",  # 中国联通DNS
         ])
         
-        # 去重并返回
+        # Remove duplicates and return
         return list(set(all_servers))
     
-    def _query_single_dns(self, dns_server: str):
-        """查询单个DNS服务器"""
-        # 检查缓存
+    def _query_single_dns(self, dns_server: str) -> None:
+        """Query a single DNS server.
+        
+        Args:
+            dns_server: The DNS server IP address to query.
+        """
+        # Check cache
         cache_key = f"{dns_server}_{self.domain}"
         if cache_key in self.dns_cache:
             cached_ips = self.dns_cache[cache_key]
@@ -160,22 +181,30 @@ class EnhancedDNSResolver:
                     found_ips.append(ip)
                     print(f"✓ {dns_server}: {ip}")
             
-            # 缓存结果
+            # Cache results
             if found_ips:
                 self.dns_cache[cache_key] = found_ips
                 
         except Exception:
-            pass  # 静默忽略失败的DNS查询
+            pass  # Silently ignore failed DNS queries
     
-    def _verify_found_ips(self):
-        """验证找到的IP地址是否真实有效（快速模式）"""
+    def _verify_found_ips(self) -> None:
+        """Verify found IP addresses are real and valid (fast mode)."""
         print("\n正在快速验证IP地址有效性...")
         
-        def verify_single_ip(ip):
+        def verify_single_ip(ip: str) -> bool:
+            """Verify a single IP address.
+            
+            Args:
+                ip: The IP address to verify.
+                
+            Returns:
+                True if the IP is valid, False otherwise.
+            """
             try:
-                # 尝试连接到IP的80端口，使用更短的超时时间
+                # Try to connect to port 80 with shorter timeout
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)  # 减少超时时间
+                sock.settimeout(1)  # Reduced timeout
                 result = sock.connect_ex((ip, 80))
                 sock.close()
                 
@@ -190,61 +219,35 @@ class EnhancedDNSResolver:
                 print(f"✗ 验证失败: {ip}")
                 return False
         
-        # 并行验证IP地址，增加并发数
+        # Verify IP addresses in parallel with increased concurrency
         with ThreadPoolExecutor(max_workers=30) as executor:
             futures = {executor.submit(verify_single_ip, ip): ip for ip in self.found_ips}
             
             for future in as_completed(futures):
                 try:
-                    future.result(timeout=2)  # 减少超时时间
+                    future.result(timeout=2)  # Reduced timeout
                 except Exception:
                     continue
         
-        # 只保留验证通过的IP
+        # Keep only verified IPs
         self.found_ips = self.verified_ips
         print(f"验证完成，有效IP数量: {len(self.found_ips)}")
     
     
     def _is_valid_ip(self, ip: str) -> bool:
-        """HTTP DNS查询（DoH服务）"""
-        http_services = [
-            # Google DoH
-            f"https://dns.google/resolve?name={self.domain}&type=A",
-            # Cloudflare DoH
-            f"https://cloudflare-dns.com/dns-query?name={self.domain}&type=A",
-            # OpenDNS DoH
-            f"https://doh.opendns.com/dns-query?name={self.domain}&type=A",
-            # Quad9 DoH
-            f"https://dns.quad9.net:5053/dns-query?name={self.domain}&type=A",
-            # AdGuard DoH
-            f"https://dns.adguard.com/dns-query?name={self.domain}&type=A",
-            # CleanBrowsing DoH
-            f"https://doh.cleanbrowsing.org/doh/security-filter/dns-query?name={self.domain}&type=A",
-            # ControlD DoH
-            f"https://doh.controld.com/dns-query?name={self.domain}&type=A",
-            # NextDNS DoH
-            f"https://dns.nextdns.io/dns-query?name={self.domain}&type=A",
-            # Mullvad DoH
-            f"https://doh.mullvad.net/dns-query?name={self.domain}&type=A",
-            # LibreDNS DoH
-            f"https://doh.libredns.gr/dns-query?name={self.domain}&type=A"
-        ]
+        """Check if the given string is a valid IP address.
         
-        for service_url in http_services:
-            try:
-                response = requests.get(service_url, timeout=2)  # 减少超时时间
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'Answer' in data:
-                        for answer in data['Answer']:
-                            if answer.get('type') == 1:
-                                ip = answer.get('data', '').strip()
-                                if self._is_valid_ip(ip):
-                                    self.found_ips.add(ip)
-                                    service_name = service_url.split('//')[1].split('/')[0]
-                                    print(f"✓ {service_name}: {ip}")
-            except Exception:
-                continue
+        Args:
+            ip: The string to check.
+            
+        Returns:
+            True if the string is a valid IP address, False otherwise.
+        """
+        try:
+            socket.inet_aton(ip)
+            return True
+        except socket.error:
+            return False
     
     def _resolve_command_line(self):
         """命令行工具解析"""
@@ -387,38 +390,52 @@ class EnhancedDNSResolver:
 
 
 class NetworkQuality:
-    """网络质量实时评估"""
+    """Real-time network quality assessment.
     
-    def __init__(self):
-        self.recent_latencies = []
-        self.recent_errors = []
-        self.max_history = 10
+    This class monitors network performance metrics and provides quality
+    factors for adaptive concurrency management.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize network quality monitor."""
+        self.recent_latencies: List[float] = []
+        self.recent_errors: List[float] = []
+        self.max_history: int = 10
     
     def get_quality_factor(self) -> float:
-        """返回网络质量因子 (0.5-2.0)"""
+        """Get network quality factor (0.5-2.0).
+        
+        Returns:
+            Quality factor based on latency and error rate.
+        """
         if not self.recent_latencies:
             return 1.0
         
         avg_latency = sum(self.recent_latencies) / len(self.recent_latencies)
         error_rate = len(self.recent_errors) / max(len(self.recent_latencies), 1)
         
-        # 基于延迟和错误率计算质量因子
+        # Calculate quality factor based on latency and error rate
         if avg_latency < 50 and error_rate < 0.1:
-            return 2.0  # 优秀网络，可以高并发
+            return 2.0  # Excellent network, can use high concurrency
         elif avg_latency < 100 and error_rate < 0.2:
-            return 1.5  # 良好网络
+            return 1.5  # Good network
         elif avg_latency < 200 and error_rate < 0.3:
-            return 1.0  # 一般网络
+            return 1.0  # Average network
         else:
-            return 0.5  # 较差网络，降低并发
+            return 0.5  # Poor network, reduce concurrency
     
-    def update_metrics(self, latency: float, success: bool):
-        """更新网络质量指标"""
+    def update_metrics(self, latency: float, success: bool) -> None:
+        """Update network quality metrics.
+        
+        Args:
+            latency: Network latency in milliseconds.
+            success: Whether the operation was successful.
+        """
         self.recent_latencies.append(latency)
         if not success:
             self.recent_errors.append(time.time())
         
-        # 保持历史记录在合理范围内
+        # Keep history within reasonable limits
         if len(self.recent_latencies) > self.max_history:
             self.recent_latencies.pop(0)
         if len(self.recent_errors) > self.max_history:
@@ -426,26 +443,38 @@ class NetworkQuality:
 
 
 class AdaptiveConcurrencyManager:
-    """自适应并发管理器 - 根据网络状况动态调整并发数"""
+    """Adaptive concurrency manager.
     
-    def __init__(self):
-        self.base_workers = 10  # 增加基础并发数
-        self.max_workers = 50   # 增加最大并发数
-        self.network_quality = NetworkQuality()
-        self.adaptive_mode = True
+    This class dynamically adjusts concurrency based on network conditions
+    to optimize performance and resource usage.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize the adaptive concurrency manager."""
+        self.base_workers: int = 10  # Increased base concurrency
+        self.max_workers: int = 50   # Increased max concurrency
+        self.network_quality: NetworkQuality = NetworkQuality()
+        self.adaptive_mode: bool = True
     
     def get_optimal_workers(self, total_ips: int) -> int:
-        """根据网络质量和IP数量动态计算最优并发数"""
+        """Calculate optimal concurrency based on network quality and IP count.
+        
+        Args:
+            total_ips: Total number of IPs to process.
+            
+        Returns:
+            Optimal number of worker threads.
+        """
         if not self.adaptive_mode:
             return min(self.base_workers, total_ips)
         
-        # 根据网络质量调整基础并发数
+        # Adjust base concurrency based on network quality
         quality_factor = self.network_quality.get_quality_factor()
         adjusted_workers = int(self.base_workers * quality_factor)
         
-        # 根据IP数量调整
+        # Adjust based on IP count
         if total_ips <= 5:
-            return min(3, total_ips)  # 少量IP时降低并发
+            return min(3, total_ips)  # Reduce concurrency for small IP counts
         elif total_ips <= 15:
             return min(adjusted_workers, total_ips)
         else:
@@ -453,42 +482,58 @@ class AdaptiveConcurrencyManager:
 
 
 class OptimizedConnectionManager:
-    """优化的连接管理器"""
+    """Optimized connection manager.
     
-    def __init__(self, config=None):
+    This class manages HTTP connections with pooling and retry strategies
+    to optimize network performance and resource usage.
+    """
+    
+    def __init__(self, config: Optional[Dict] = None) -> None:
+        """Initialize the connection manager.
+        
+        Args:
+            config: Configuration dictionary for connection settings.
+        """
         self.config = config or {}
-        self.session_pool = {}
-        self.connection_pool = None
-        self.setup_connection_pool()
+        self.session_pool: Dict[str, requests.Session] = {}
+        self.connection_pool: Optional[HTTPAdapter] = None
+        self._setup_connection_pool()
     
-    def setup_connection_pool(self):
-        """设置连接池"""
-        # 从配置获取参数
+    def _setup_connection_pool(self) -> None:
+        """Setup connection pool."""
+        # Get parameters from config
         retry_attempts = self.config.get("retry_attempts", 2)
         pool_size = self.config.get("connection_pool_size", 20)
         
-        # 创建优化的 HTTP 适配器
+        # Create optimized HTTP adapter
         retry_strategy = Retry(
-            total=retry_attempts,  # 从配置获取重试次数
-            backoff_factor=0.1,  # 快速重试
+            total=retry_attempts,  # Get retry count from config
+            backoff_factor=0.1,  # Fast retry
             status_forcelist=[429, 500, 502, 503, 504],
         )
         
         self.connection_pool = HTTPAdapter(
-            pool_connections=pool_size,  # 从配置获取连接池大小
+            pool_connections=pool_size,  # Get pool size from config
             pool_maxsize=pool_size,
             max_retries=retry_strategy,
-            pool_block=False  # 非阻塞模式
+            pool_block=False  # Non-blocking mode
         )
     
     def get_session(self, ip: str) -> requests.Session:
-        """获取或创建会话"""
+        """Get or create a session for the given IP.
+        
+        Args:
+            ip: The IP address for the session.
+            
+        Returns:
+            A requests Session object.
+        """
         if ip not in self.session_pool:
             session = requests.Session()
             session.mount("http://", self.connection_pool)
             session.mount("https://", self.connection_pool)
             
-            # 优化会话配置
+            # Optimize session configuration
             session.headers.update({
                 'User-Agent': 'HostsOptimizer/1.0',
                 'Connection': 'keep-alive',
@@ -499,8 +544,8 @@ class OptimizedConnectionManager:
         
         return self.session_pool[ip]
     
-    def cleanup(self):
-        """清理连接池"""
+    def cleanup(self) -> None:
+        """Clean up connection pool."""
         for session in self.session_pool.values():
             session.close()
         self.session_pool.clear()

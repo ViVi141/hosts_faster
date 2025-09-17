@@ -1,39 +1,48 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-管理员权限检查模块
-用于检查程序是否以管理员权限运行，如果不是则自动重启
+"""Administrator privilege check module.
+
+This module is used to check if the program is running with administrator
+privileges, and automatically restart if not.
 """
 
 import ctypes
-import sys
 import os
-import subprocess
 import platform
+import subprocess
+import sys
 
 
-def is_admin():
-    """检查当前进程是否以管理员权限运行"""
+def is_admin() -> bool:
+    """Check if the current process is running with administrator privileges.
+    
+    Returns:
+        True if running with admin privileges, False otherwise.
+    """
     try:
         if platform.system() == "Windows":
-            # Windows系统检查
+            # Windows system check
             return ctypes.windll.shell32.IsUserAnAdmin()
         else:
-            # Linux/macOS系统检查
+            # Linux/macOS system check
             return os.geteuid() == 0
-    except:
+    except Exception:
         return False
 
 
-def run_as_admin():
-    """以管理员权限重新启动程序"""
+def run_as_admin() -> bool:
+    """Restart the program with administrator privileges.
+    
+    Returns:
+        True if restart was successful, False otherwise.
+    """
     if platform.system() == "Windows":
-        # Windows系统
+        # Windows system
         try:
-            # 获取当前脚本的完整路径
+            # Get the full path of the current script
             script_path = os.path.abspath(sys.argv[0])
             
-            # 使用ShellExecute以管理员权限运行
+            # Use ShellExecute to run with administrator privileges
             ctypes.windll.shell32.ShellExecuteW(
                 None, 
                 "runas", 
@@ -47,9 +56,9 @@ def run_as_admin():
             print(f"无法以管理员权限启动: {e}")
             return False
     else:
-        # Linux/macOS系统
+        # Linux/macOS system
         try:
-            # 使用sudo重新启动
+            # Use sudo to restart
             script_path = os.path.abspath(sys.argv[0])
             subprocess.run(['sudo', sys.executable, script_path] + sys.argv[1:])
             return True
@@ -58,8 +67,8 @@ def run_as_admin():
             return False
 
 
-def check_admin_privileges():
-    """检查管理员权限，如果不是则尝试重启"""
+def check_admin_privileges() -> None:
+    """Check administrator privileges and restart if necessary."""
     if not is_admin():
         print("检测到程序未以管理员权限运行")
         print("正在尝试以管理员权限重新启动...")
@@ -71,14 +80,14 @@ def check_admin_privileges():
             print("无法以管理员权限启动程序")
             print("请手动以管理员身份运行此程序")
             
-            # 在Windows上显示UAC提示
+            # Show UAC prompt on Windows
             if platform.system() == "Windows":
                 try:
                     import tkinter as tk
                     from tkinter import messagebox
                     
                     root = tk.Tk()
-                    root.withdraw()  # 隐藏主窗口
+                    root.withdraw()  # Hide main window
                     
                     result = messagebox.askyesno(
                         "需要管理员权限",
@@ -96,7 +105,7 @@ def check_admin_privileges():
                         sys.exit(1)
                         
                 except ImportError:
-                    # 如果没有tkinter，使用命令行提示
+                    # If tkinter is not available, use command line prompt
                     input("请按Enter键退出程序，然后以管理员身份重新运行...")
                     sys.exit(1)
             else:
