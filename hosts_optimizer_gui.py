@@ -6,16 +6,12 @@ This module provides a graphical user interface for testing different IP address
 of ar-gcp-cdn.bistudio.com and selecting the optimal IP to update the hosts file.
 """
 
-import hashlib
 import json
-import os
 import platform
 import queue
-import random
 import socket
 import statistics
 import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +25,7 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, ttk
 
 try:
     from hosts_optimizer_true_parallel import TrueParallelOptimizerAdapter
@@ -64,6 +60,7 @@ class EnhancedDNSResolver:
         self.found_ips: set = set()
         self.dns_cache: Dict = {}  # DNS query cache
         self.verified_ips: set = set()  # Verified IPs
+        self.dns_servers: set = set()  # DNS服务器IP集合，用于过滤
         
     def resolve_all_ips(self) -> List[str]:
         """Resolve domain IPs using true parallel mode (avoiding local DNS).
@@ -72,12 +69,18 @@ class EnhancedDNSResolver:
             List of unique IP addresses found.
         """
         print(f"正在全面解析 {self.domain} 的IP地址...")
-        print("⚠️ 注意：为避免DNS污染，不使用本地DNS解析")
+        print("⚠️ 注意：为避免DNS污染，优先使用权威DNS服务器")
         print("🚀 使用并行模式，所有DNS服务器同时查询...")
         
         # Collect all DNS servers
         all_dns_servers = self._collect_all_dns_servers()
+        self.dns_servers = set(all_dns_servers)  # 保存DNS服务器IP用于过滤
         print(f"📡 共收集到 {len(all_dns_servers)} 个权威DNS服务器")
+        
+        # Track statistics
+        successful_queries = 0
+        failed_queries = 0
+        error_details = []
         
         # Query all DNS servers in parallel
         with ThreadPoolExecutor(max_workers=min(50, len(all_dns_servers))) as executor:
@@ -87,24 +90,93 @@ class EnhancedDNSResolver:
             }
             
             completed = 0
-            for future in as_completed(futures, timeout=10):
-                try:
-                    future.result()
-                    completed += 1
-                    if completed % 10 == 0:  # Show progress every 10 completions
-                        print(f"📊 DNS查询进度: {completed}/{len(all_dns_servers)}")
-                except Exception:
-                    continue
+            try:
+                for future in as_completed(futures, timeout=30):  # 增加超时时间到30秒
+                    try:
+                        result = future.result(timeout=5)
+                        if result:
+                            successful_queries += 1
+                        else:
+                            failed_queries += 1
+                        completed += 1
+                        if completed % 10 == 0:  # Show progress every 10 completions
+                            print(f"📊 DNS查询进度: {completed}/{len(all_dns_servers)} (成功: {successful_queries}, 失败: {failed_queries})")
+                    except Exception as e:
+                        failed_queries += 1
+                        completed += 1
+                        error_details.append(str(e)[:50])
+                        if len(error_details) <= 5:  # 只记录前5个错误
+                            print(f"⚠️ DNS查询异常: {str(e)[:100]}")
+            except Exception as e:
+                print(f"⚠️ DNS查询超时或异常: {str(e)[:100]}")
         
-        # Verify found IP addresses
-        self._verify_found_ips()
+        print(f"📊 DNS查询完成: 成功 {successful_queries} 个, 失败 {failed_queries} 个")
         
-        ip_list = list(self.found_ips)
-        print(f"\n总共找到 {len(ip_list)} 个唯一IP地址:")
-        for i, ip in enumerate(ip_list, 1):
+        # 如果通过权威DNS没有找到IP，尝试使用本地DNS作为回退
+        if len(self.found_ips) == 0:
+            print("⚠️ 所有权威DNS服务器查询失败，尝试使用本地DNS作为回退...")
+            try:
+                # 使用系统默认DNS
+                resolver = dns.resolver.Resolver()
+                resolver.timeout = 5
+                resolver.lifetime = 10
+                answers = resolver.resolve(self.domain, 'A')
+                for answer in answers:
+                    ip = str(answer)
+                    should_filter, reason = self._should_filter_ip(ip)
+                    if not should_filter:
+                        self.found_ips.add(ip)
+                        print(f"✓ 本地DNS: {ip}")
+                    else:
+                        print(f"⚠️ 本地DNS (已过滤): {ip} - {reason}")
+            except Exception as e:
+                print(f"⚠️ 本地DNS查询也失败: {str(e)[:100]}")
+        
+        # 如果仍然没有找到IP，尝试使用socket.gethostbyname作为最后回退
+        if len(self.found_ips) == 0:
+            print("⚠️ 尝试使用系统默认解析作为最后回退...")
+            try:
+                ip = socket.gethostbyname(self.domain)
+                should_filter, reason = self._should_filter_ip(ip)
+                if not should_filter:
+                    self.found_ips.add(ip)
+                    print(f"✓ 系统解析: {ip}")
+                else:
+                    print(f"⚠️ 系统解析 (已过滤): {ip} - {reason}")
+            except Exception as e:
+                print(f"⚠️ 系统解析也失败: {str(e)[:100]}")
+        
+        # 如果找到IP，进行验证（但不强制要求验证通过）
+        if len(self.found_ips) > 0:
+            print(f"\n找到 {len(self.found_ips)} 个IP地址，开始验证...")
+            self._verify_found_ips()
+        else:
+            print("❌ 所有DNS解析方法都失败，无法获取IP地址")
+            print("💡 请检查:")
+            print("   1. 网络连接是否正常")
+            print("   2. 防火墙是否阻止了DNS查询")
+            print("   3. 是否使用了VPN或代理")
+            print("   4. DNS服务器是否可访问")
+        
+        # 最终过滤：确保所有返回的IP都是有效的
+        final_ips = []
+        final_filtered_count = 0
+        for ip in self.found_ips:
+            should_filter, reason = self._should_filter_ip(ip)
+            if not should_filter:
+                final_ips.append(ip)
+            else:
+                final_filtered_count += 1
+                print(f"⚠️ 最终过滤: {ip} - {reason}")
+        
+        if final_filtered_count > 0:
+            print(f"📊 最终过滤掉 {final_filtered_count} 个无效IP地址")
+        
+        print(f"\n总共找到 {len(final_ips)} 个有效IP地址:")
+        for i, ip in enumerate(final_ips, 1):
             print(f"{i:2d}. {ip}")
         
-        return ip_list
+        return final_ips
     
     def _collect_all_dns_servers(self) -> List[str]:
         """Collect all available DNS servers.
@@ -168,47 +240,91 @@ class EnhancedDNSResolver:
         # Remove duplicates and return
         return list(set(all_servers))
     
-    def _query_single_dns(self, dns_server: str) -> None:
+    def _query_single_dns(self, dns_server: str) -> bool:
         """Query a single DNS server.
         
         Args:
             dns_server: The DNS server IP address to query.
+            
+        Returns:
+            True if query was successful, False otherwise.
         """
         # Check cache
         cache_key = f"{dns_server}_{self.domain}"
         if cache_key in self.dns_cache:
             cached_ips = self.dns_cache[cache_key]
             for ip in cached_ips:
-                if self._is_valid_ip(ip):
+                should_filter, reason = self._should_filter_ip(ip)
+                if not should_filter:
                     self.found_ips.add(ip)
                     print(f"✓ {dns_server} (缓存): {ip}")
-            return
+                else:
+                    print(f"⚠️ {dns_server} (缓存，已过滤): {ip} - {reason}")
+            return True
         
         try:
             resolver = dns.resolver.Resolver()
             resolver.nameservers = [dns_server]
-            resolver.timeout = 0.5
-            resolver.lifetime = 0.5
+            resolver.timeout = 3  # 增加超时时间到3秒
+            resolver.lifetime = 5  # 增加总超时时间到5秒
             
             answers = resolver.resolve(self.domain, 'A')
             found_ips = []
             for answer in answers:
                 ip = str(answer)
-                if self._is_valid_ip(ip):
+                should_filter, reason = self._should_filter_ip(ip)
+                if not should_filter:
                     self.found_ips.add(ip)
                     found_ips.append(ip)
                     print(f"✓ {dns_server}: {ip}")
+                else:
+                    print(f"⚠️ {dns_server} (已过滤): {ip} - {reason}")
             
             # Cache results
             if found_ips:
                 self.dns_cache[cache_key] = found_ips
+                return True
+            else:
+                return False
                 
+        except dns.resolver.NXDOMAIN:
+            # 域名不存在
+            return False
+        except dns.resolver.Timeout:
+            # 超时
+            return False
+        except dns.resolver.NoAnswer:
+            # 无答案
+            return False
         except Exception:
-            pass  # Silently ignore failed DNS queries
+            # 其他错误，记录但不输出（避免输出过多）
+            return False
     
     def _verify_found_ips(self) -> None:
-        """Verify found IP addresses are real and valid (fast mode)."""
+        """Verify found IP addresses are real and valid (fast mode).
+        
+        注意：如果验证失败，仍然保留IP地址，因为有些IP可能只支持HTTPS或特定端口。
+        同时会过滤掉局域网IP和DNS服务器IP。
+        """
         print("\n正在快速验证IP地址有效性...")
+        print("💡 提示：即使验证失败，IP地址仍会被保留（某些IP可能只支持HTTPS）")
+        
+        # 先过滤掉应该被排除的IP
+        filtered_count = 0
+        ips_to_verify = []
+        for ip in self.found_ips:
+            should_filter, reason = self._should_filter_ip(ip)
+            if should_filter:
+                filtered_count += 1
+                print(f"⚠️ 验证前已过滤: {ip} - {reason}")
+            else:
+                ips_to_verify.append(ip)
+        
+        if filtered_count > 0:
+            print(f"📊 已过滤 {filtered_count} 个无效IP地址（局域网IP或DNS服务器IP）")
+        
+        # 更新found_ips为过滤后的IP列表
+        self.found_ips = set(ips_to_verify)
         
         def verify_single_ip(ip: str) -> bool:
             """Verify a single IP address.
@@ -219,37 +335,49 @@ class EnhancedDNSResolver:
             Returns:
                 True if the IP is valid, False otherwise.
             """
-            try:
-                # Try to connect to port 80 with shorter timeout
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)  # Reduced timeout
-                result = sock.connect_ex((ip, 80))
-                sock.close()
-                
-                if result == 0:
-                    self.verified_ips.add(ip)
-                    print(f"✓ 验证通过: {ip}")
-                    return True
-                else:
-                    print(f"✗ 验证失败: {ip}")
-                    return False
-            except Exception:
-                print(f"✗ 验证失败: {ip}")
-                return False
+            # 尝试多个端口：80 (HTTP) 和 443 (HTTPS)
+            ports_to_try = [80, 443]
+            
+            for port in ports_to_try:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(2)  # 增加超时时间到2秒
+                    result = sock.connect_ex((ip, port))
+                    sock.close()
+                    
+                    if result == 0:
+                        self.verified_ips.add(ip)
+                        print(f"✓ 验证通过: {ip} (端口 {port})")
+                        return True
+                except Exception:
+                    continue
+            
+            # 如果所有端口都失败，仍然保留IP（可能只是暂时不可用）
+            print(f"⚠️ 验证未通过: {ip} (但会保留，可能在后续测试中可用)")
+            return False
         
         # Verify IP addresses in parallel with increased concurrency
+        verified_count = 0
         with ThreadPoolExecutor(max_workers=30) as executor:
             futures = {executor.submit(verify_single_ip, ip): ip for ip in self.found_ips}
             
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=30):  # 增加总体超时
                 try:
-                    future.result(timeout=2)  # Reduced timeout
+                    if future.result(timeout=5):
+                        verified_count += 1
                 except Exception:
                     continue
         
-        # Keep only verified IPs
-        self.found_ips = self.verified_ips
-        print(f"验证完成，有效IP数量: {len(self.found_ips)}")
+        # 保留所有找到的IP，包括未验证通过的（因为验证可能过于严格）
+        # 只将验证通过的IP添加到verified_ips集合中，但保留所有IP在found_ips中
+        print(f"验证完成: {verified_count} 个IP验证通过, 共 {len(self.found_ips)} 个IP地址")
+        
+        # 如果验证通过的IP为空，但found_ips不为空，说明验证可能过于严格
+        # 在这种情况下，保留所有IP，让后续的HTTP/HTTPS测试来决定
+        if len(self.verified_ips) == 0 and len(self.found_ips) > 0:
+            print("⚠️ 所有IP验证未通过，但会保留所有IP进行后续测试")
+            # 将所有IP添加到verified_ips，以便后续使用
+            self.verified_ips = self.found_ips.copy()
     
     def _is_valid_ip(self, ip: str) -> bool:
         """Check if the given string is a valid IP address.
@@ -265,6 +393,78 @@ class EnhancedDNSResolver:
             return True
         except socket.error:
             return False
+    
+    def _is_private_ip(self, ip: str) -> bool:
+        """Check if the IP address is a private/local network IP.
+        
+        Args:
+            ip: The IP address to check.
+            
+        Returns:
+            True if the IP is a private IP, False otherwise.
+        """
+        try:
+            parts = ip.split('.')
+            if len(parts) != 4:
+                return False
+            
+            first = int(parts[0])
+            second = int(parts[1])
+            
+            # 10.0.0.0/8
+            if first == 10:
+                return True
+            
+            # 172.16.0.0/12
+            if first == 172 and 16 <= second <= 31:
+                return True
+            
+            # 192.168.0.0/16
+            if first == 192 and second == 168:
+                return True
+            
+            # 127.0.0.0/8 (回环地址)
+            if first == 127:
+                return True
+            
+            # 169.254.0.0/16 (链路本地地址)
+            if first == 169 and second == 254:
+                return True
+            
+            return False
+        except (ValueError, IndexError):
+            return False
+    
+    def _is_dns_server_ip(self, ip: str) -> bool:
+        """Check if the IP address is a DNS server IP.
+        
+        Args:
+            ip: The IP address to check.
+            
+        Returns:
+            True if the IP is a DNS server IP, False otherwise.
+        """
+        return ip in self.dns_servers
+    
+    def _should_filter_ip(self, ip: str) -> Tuple[bool, str]:
+        """Check if an IP should be filtered out.
+        
+        Args:
+            ip: The IP address to check.
+            
+        Returns:
+            Tuple of (should_filter, reason). should_filter is True if IP should be filtered.
+        """
+        if not self._is_valid_ip(ip):
+            return (True, "无效的IP地址格式")
+        
+        if self._is_private_ip(ip):
+            return (True, "局域网/私有IP地址")
+        
+        if self._is_dns_server_ip(ip):
+            return (True, "DNS服务器IP地址")
+        
+        return (False, "")
 
 
 class NetworkQuality:
@@ -569,14 +769,14 @@ class MultiDimensionalHealthChecker:
         try:
             response = requests.get(f"http://{ip}/", headers={'Host': domain}, timeout=5)
             results['http_support'] = response.status_code in [200, 301, 302, 403]
-        except:
+        except (requests.RequestException, Exception):
             pass
         
         # HTTPS支持
         try:
             response = requests.get(f"https://{ip}/", headers={'Host': domain}, timeout=5, verify=False)
             results['https_support'] = response.status_code in [200, 301, 302, 403]
-        except:
+        except (requests.RequestException, Exception):
             pass
         
         # 计算协议评分
@@ -620,7 +820,7 @@ class MultiDimensionalHealthChecker:
             else:
                 results['geo_score'] = 0.5
                 
-        except:
+        except (ValueError, KeyError, Exception):
             pass
         
         return results
@@ -827,7 +1027,7 @@ class SSLCertificateChecker:
                     continue
             
             return -1
-        except:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError, Exception):
             return -1
 
 
@@ -1198,7 +1398,6 @@ class OptimizedTester:
             https_info = f"HTTPS: {result['best_https_latency']:.1f}ms"
             
             # 检查HTTPS状态中的SSL信息
-            ssl_warning = None
             ssl_verified = True
             
             # 从HTTPS状态中获取SSL信息
@@ -1206,7 +1405,6 @@ class OptimizedTester:
                 if status.get('success', False):
                     if not status.get('ssl_verified', True):
                         ssl_verified = False
-                        ssl_warning = status.get('ssl_warning', 'SSL验证失败')
                     break
             
             # 添加SSL证书状态
@@ -1405,12 +1603,12 @@ class HostsOptimizer:
             
             print(f"✓ Hosts 文件已更新: {best_ip} {self.domain}")
             
-        except PermissionError as e:
+        except PermissionError:
             print("❌ 权限不足，无法修改 hosts 文件")
             print("请以管理员身份运行此脚本")
             raise  # 重新抛出异常，让GUI能够捕获
-        except Exception as e:
-            print(f"❌ 更新 hosts 文件失败: {e}")
+        except Exception as ex:
+            print(f"❌ 更新 hosts 文件失败: {ex}")
             raise  # 重新抛出异常，让GUI能够捕获
     
     def flush_dns(self):
@@ -1927,8 +2125,13 @@ class HostsOptimizerGUI:
             domain_ips = self.optimizer.get_domain_ips()
             
             if not domain_ips:
-                self.log_message("无法获取域名的 IP 地址", "ERROR")
+                self.log_message("❌ 无法获取域名的 IP 地址", "ERROR")
                 self.log_detailed("DNS 解析失败，无法获取任何 IP 地址", "ERROR", "DNS_RESOLVE")
+                self.log_message("💡 请检查:", "INFO")
+                self.log_message("   1. 网络连接是否正常", "INFO")
+                self.log_message("   2. 防火墙是否阻止了DNS查询", "INFO")
+                self.log_message("   3. 是否使用了VPN或代理", "INFO")
+                self.log_message("   4. DNS服务器是否可访问", "INFO")
                 self.update_progress("失败", 0, 0, "无法获取IP地址")
                 return
             
@@ -2022,6 +2225,11 @@ class HostsOptimizerGUI:
             if not domain_ips:
                 self.log_message("❌ 没有找到可用的 IP 地址", "ERROR")
                 self.log_detailed("DNS解析失败，未找到任何IP地址", "ERROR", "DNS_RESOLVE")
+                self.log_message("💡 请检查:", "INFO")
+                self.log_message("   1. 网络连接是否正常", "INFO")
+                self.log_message("   2. 防火墙是否阻止了DNS查询", "INFO")
+                self.log_message("   3. 是否使用了VPN或代理", "INFO")
+                self.log_message("   4. DNS服务器是否可访问", "INFO")
                 self.update_progress("失败", 0, 0, "DNS解析失败")
                 return
             
@@ -2275,11 +2483,11 @@ class HostsOptimizerGUI:
         available_ips = len([r for r in self.test_results if r.get('http_available', False) or r.get('https_available', False)])
         https_available = len([r for r in self.test_results if r.get('https_available', False)])
         
-        preview_content += f"📊 统计信息:\n"
+        preview_content += "📊 统计信息:\n"
         preview_content += f"   • 总IP数量: {total_ips}\n"
         preview_content += f"   • 可用IP数量: {available_ips}\n"
         preview_content += f"   • HTTPS可用: {https_available}\n"
-        preview_content += f"   • 注：带宽测试仅用于网络质量评估\n\n"
+        preview_content += "   • 注：带宽测试仅用于网络质量评估\n\n"
         
         # 所有可用结果
         available_results = [r for r in self.test_results if r.get('http_available', False) or r.get('https_available', False)]
@@ -2297,14 +2505,14 @@ class HostsOptimizerGUI:
             
             preview_content += f"   {i+1}. {ip} | 评分: {score:.1f} | Ping: {ping:.1f}ms | HTTP: {http_ok} | HTTPS: {https_ok} | SSL: {ssl_ok}\n"
         
-        preview_content += f"\n💡 建议:\n"
+        preview_content += "\n💡 建议:\n"
         if sorted_results:
             best_ip = sorted_results[0].get('ip', 'N/A')
             best_score = sorted_results[0].get('overall_score', 0)
             preview_content += f"   • 推荐使用: {best_ip} (评分: {best_score:.1f})\n"
-            preview_content += f"   • 点击'更新Hosts'按钮应用最佳IP\n"
+            preview_content += "   • 点击'更新Hosts'按钮应用最佳IP\n"
         else:
-            preview_content += f"   • 没有找到可用的IP地址\n"
+            preview_content += "   • 没有找到可用的IP地址\n"
         
         # 插入内容
         text_widget.insert(tk.END, preview_content)
@@ -2593,7 +2801,7 @@ class HostsOptimizerGUI:
         """显示关于对话框"""
         about_text = """Arma Reforger 创意工坊修复工具
 
-版本: 2.1.0
+版本: 2.2.0
 目标域名: ar-gcp-cdn.bistudio.com
 
 功能特点:

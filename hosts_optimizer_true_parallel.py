@@ -7,20 +7,14 @@ architecture to solve serial waiting issues.
 """
 
 import asyncio
-import json
-import platform
 import queue
 import socket
 import ssl
 import statistics
-import subprocess
-import threading
 import time
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -125,7 +119,7 @@ class TrueParallelTester:
             return []
         
         self.progress_callback = progress_callback
-        print(f"🚀 启动并行测试模式")
+        print("🚀 启动并行测试模式")
         print(f"📊 测试IP数量: {len(ips)}")
         print(f"⚡ 最大并发数: {self.config.get('max_concurrent_requests', 100)}")
         
@@ -185,7 +179,7 @@ class TrueParallelTester:
             results.sort(key=lambda x: x.overall_score, reverse=True)
             
             total_time = time.time() - start_time
-            print(f"\n🎉 并行测试完成！")
+            print("\n🎉 并行测试完成！")
             print(f"⏱️  总耗时: {total_time:.2f}秒")
             print(f"📈 平均每个IP耗时: {total_time/len(ips):.2f}秒")
             print(f"🏆 最佳IP: {results[0].ip} (评分: {results[0].overall_score:.1f})")
