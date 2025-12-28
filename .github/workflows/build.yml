@@ -9,7 +9,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    
+    permissions:
+      contents: write  # 需要写入权限来创建 Release
+      
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -92,3 +94,4 @@ jobs:
           查看 [README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#版本历史) 了解详细更新内容。
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true  # 如果 Release 创建失败，继续执行
