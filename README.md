@@ -98,7 +98,7 @@ python hosts_optimizer_gui.py
 
 ## 许可证
 
-此项目使用 GNU General Public License v2.0 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+此项目使用 AGPL-3.0 license许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 版本历史
 
